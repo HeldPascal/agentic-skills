@@ -145,6 +145,13 @@ def load_config() -> dict[str, Any]:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read an observations.jsonl-shaped file (used only for active/archived
+    observations). Rejects records without a valid `kind`, which includes
+    observations written before the 0.5.0 execution/task split: reading them
+    as-is would silently misclassify them as "execution" and mix pre-split,
+    potentially task-level fields into combination aggregates. Fail loudly
+    instead so the operator archives/migrates them deliberately.
+    """
     if not path.exists():
         return []
     values: list[dict[str, Any]] = []
@@ -156,6 +163,14 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             if not isinstance(value, dict):
                 raise ValueError(f"{path}:{line_number}: expected JSON object")
             ensure_supported_schema(value, f"{path}:{line_number}")
+            if value.get("kind") not in REQUIRED_FIELDS_BY_KIND:
+                raise ValueError(
+                    f"{path}:{line_number}: observation has no valid 'kind' "
+                    "(execution/task); this predates the 0.5.0 observation-kind split "
+                    "and cannot be read as-is. Move this file out of the active/archive "
+                    "path (or delete it) before continuing, or migrate its records to "
+                    "the current schema by hand."
+                )
             values.append(value)
     return values
 
@@ -562,7 +577,12 @@ def append_observation(raw: str, *, task_id: str | None = None) -> None:
             else:
                 value[field] = counters[field]
     elif task_id is not None:
-        value.setdefault("task_id", task_id)
+        body_task_id = value.get("task_id")
+        if body_task_id is not None and body_task_id != task_id:
+            raise ValueError(
+                f"observation task_id {body_task_id!r} does not match --task-id {task_id!r}"
+            )
+        value["task_id"] = task_id
 
     required = REQUIRED_FIELDS_BY_KIND[kind]
     missing = [field for field in required if not value.get(field)]

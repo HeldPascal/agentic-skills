@@ -2,7 +2,7 @@
 name: orca-orchestrator
 description: Orchestrate software-engineering work through Orca with spec-first planning, role-separated Junior/Senior execution, independent review, adaptive harness/model/locality routing, bounded autonomous recovery, and minimal project-owner intervention.
 metadata:
-  version: "0.6.0"
+  version: "0.6.1"
 ---
 
 # Orca Orchestrator

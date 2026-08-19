@@ -333,6 +333,22 @@ def test_execution_observation_with_task_id_stamps_task_id_without_requiring_tas
     assert row["task_id"] == "task-1"
 
 
+def test_execution_observation_rejects_task_id_mismatch(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    observation = json.dumps(
+        {
+            "kind": "execution",
+            "task_id": "other-task",
+            "role": "developer",
+            "harness": "pi",
+            "model": "qwen/qwen3-coder-next",
+        }
+    )
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 1
+    assert "does not match --task-id" in result.stderr
+
+
 def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
     tmp_path: Path,
 ) -> None:
@@ -412,6 +428,29 @@ def test_execution_and_task_observations_compact_in_separate_groups(tmp_path: Pa
     active_path = tmp_path / "state" / "orca-orchestrator" / "observations.jsonl"
     active_kinds = {json.loads(line)["kind"] for line in active_path.read_text().splitlines()}
     assert active_kinds == {"execution", "task"}
+
+
+def test_pre_split_observation_without_kind_is_rejected_on_read(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+
+    observations_path = tmp_path / "state" / "orca-orchestrator" / "observations.jsonl"
+    legacy_record = {
+        "schema_version": 1,
+        "timestamp": "2026-01-01T00:00:00Z",
+        "task_type": "implementation",
+        "harness": "pi",
+        "model": "qwen/qwen3-coder-next",
+        "review_verdict": "APPROVE",
+    }
+    observations_path.write_text(json.dumps(legacy_record) + "\n")
+
+    result = run_state(tmp_path, "aggregate")
+    assert result.returncode == 1
+    assert "no valid 'kind'" in result.stderr
+
+    compact_result = run_state(tmp_path, "compact")
+    assert compact_result.returncode == 1
+    assert "no valid 'kind'" in compact_result.stderr
 
 
 def test_manual_compact_is_noop_below_threshold(tmp_path: Path) -> None:

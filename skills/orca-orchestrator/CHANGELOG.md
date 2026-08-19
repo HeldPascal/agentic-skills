@@ -2,6 +2,11 @@
 
 All notable changes to the `orca-orchestrator` skill are documented here. This skill's `version` (in `SKILL.md` frontmatter) follows [Semantic Versioning](https://semver.org/): breaking changes to the state/config schema or the skill's behavioral contract bump the major version, additive changes bump the minor version, and clarifications/fixes bump the patch version.
 
+## 0.6.1
+
+- Reading `observations.jsonl`/archived observation files now rejects any record without a valid `kind` (`execution`/`task`) instead of silently defaulting it to `execution`. Pre-0.5.0 observations had no `kind` and could carry now-task-only fields; letting them default to `execution` would have leaked those fields into combination aggregates. See [state.md](skills/orca-orchestrator/references/state.md#migrating-from-pre-050-observations) for what to do if this triggers.
+- `execution` observations now reject a `task_id` in the JSON body that doesn't match `--task-id`, matching the check `task` observations already had.
+
 ## 0.6.0
 
 0.5.0 documented the execution/task observation split but did not actually enforce it in code, so an agent could still put task-level fields on an execution observation, override task.py's counters by hand, record a task's outcome without `task.py` ever having run, or record it twice. `scripts/state.py` now enforces all of this mechanically:

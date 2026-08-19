@@ -163,6 +163,12 @@ Task observation, **as stored** after `--task-id` filled in the derived fields (
 
 Do not fabricate missing metrics. Unknown is preferable to false precision.
 
+### Migrating from pre-0.5.0 observations
+
+Observations written before the 0.5.0 execution/task split have no `kind` field and may mix what are now task-only and execution-only fields on the same record. Reading such a record as-is under the current schema would silently misclassify it as `execution` and could leak task-level fields into combination aggregates — so `scripts/state.py` refuses to read any `observations.jsonl`/archived observations file containing a record without a valid `kind`; `observe`, `aggregate`, `compact`, and `show observations`/`show aggregates` all fail loudly on it instead of guessing.
+
+If this happens: move the offending file out of `observations.jsonl`/`archive/` (or delete it if the history isn't worth keeping — it was never used for anything beyond aggregates you can also just lose), then re-run `init`. There is no automated migrator for the pre-split shape; a general one would have to guess which role/harness/model a given legacy record's task-level-looking fields actually belonged to, which isn't recoverable from the data itself.
+
 ## Deterministic aggregates
 
 `aggregates.json` is rebuilt from both active and archived raw observations. `harnesses`, `models`, `combinations`, and `role_combinations` are derived **only from `kind: "execution"` observations** — a task observation has no single harness/model to attribute. `tasks` is derived **only from `kind: "task"` observations**. This split is what keeps a combination's stats from silently mixing per-dispatch execution outcomes with per-task outcomes; see [Observation schema](#observation-schema) for why that distinction matters.
