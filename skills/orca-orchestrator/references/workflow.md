@@ -95,6 +95,8 @@ A timeout is not permission to invent missing intent.
 
 Before creating a new dispatch after failure, review, spec repair, or takeover, check the configured limits in [guardrails.md](guardrails.md).
 
+`scripts/task.py` provides the deterministic `start`, `record`, and `status` counters referenced here.
+
 At minimum track:
 
 - dispatch count,

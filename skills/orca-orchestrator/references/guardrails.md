@@ -24,6 +24,8 @@ Limits are task-level policy, not suggestions. Do not silently exceed them.
 
 A `RETURN` normally creates semantic rework for the Junior. Count each reviewed rework attempt as one rework round.
 
+Use `scripts/task.py record --event rework` to persist each round and `scripts/task.py status` to check the snapshotted limit deterministically.
+
 When `max_rework_rounds` is reached:
 
 1. Do not start another Junior rework round.
@@ -72,11 +74,15 @@ Create an Owner gate when repairing the specification would require choosing or 
 
 Count autonomous specification repairs. After `max_spec_revisions` is reached, another material specification defect requires an Owner gate unless the new defect is purely clerical and does not alter intent.
 
+Use `scripts/task.py record --event spec_revision` to persist material revisions and `scripts/task.py status` to check the limit.
+
 Do not use `SPEC_DEFECT` to move requirements merely because implementation is difficult.
 
 ## Dispatch and task budgets
 
 Track task-level resource use when possible.
+
+`scripts/task.py record` persists dispatch and related counters, and `scripts/task.py status` computes counter and elapsed-time limit status instead of relying on LLM self-tracking.
 
 At minimum count dispatches created for the task, including implementation, review, rework, takeover, and technical retry dispatches. When `max_dispatches` is reached, stop creating new dispatches and choose one of:
 

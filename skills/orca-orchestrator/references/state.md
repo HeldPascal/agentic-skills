@@ -19,6 +19,8 @@ state root/
 ├── registry.json
 ├── aggregates.json
 ├── observations.jsonl
+├── tasks/
+│   └── <task_id>.json
 └── archive/
     └── observations-*.jsonl
 ```
@@ -30,6 +32,23 @@ The layers have different purposes:
 - `archive/`: preserved older raw observations removed from the regular loading path,
 - `aggregates.json`: deterministic statistics derived from active + archived observations,
 - `registry.json`: compact, revisable routing beliefs derived from evidence.
+
+## Task guardrail state
+
+`tasks/<task_id>.json` is short-lived, per-task guardrail bookkeeping. It is distinct from raw observations, deterministic aggregates, and qualitative registry beliefs: it is not learned evidence and is not compacted or archived like observations.
+
+Each file has `schema_version`, `task_id`, `started_at`, nullable `finished_at`, `status`, nullable `termination_reason`, a snapshot of the task's `limits`, and `counters` for dispatches, rework rounds, specification revisions, technical retries, and blocking timeouts. Computed status also includes elapsed minutes and booleans indicating whether each bounded dispatch, rework, specification-revision, or elapsed-time limit has been reached. A `null` limit has no ceiling.
+
+Use the helper rather than editing these files directly:
+
+```bash
+python scripts/task.py start <task_id> [--limits-json '{"max_rework_rounds": 3}']
+python scripts/task.py record <task_id> --event dispatch
+python scripts/task.py status <task_id>
+python scripts/task.py finish <task_id> [--termination-reason dispatch_limit_reached]
+```
+
+`start` snapshots configured limits and is idempotent, `record` increments the selected counter on an active task, `status` reports counters and computed limit state, and `finish` closes the task with an optional termination reason.
 
 Do not conflate aggregates with beliefs. A deterministic count such as `RETURN=4/12` is different from a qualitative belief such as "feedback incorporation appears reliable for small implementation tasks".
 

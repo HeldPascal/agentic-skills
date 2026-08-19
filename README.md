@@ -59,6 +59,7 @@ skills/
     │   └── state.md
     ├── scripts/
     │   ├── state.py
+    │   ├── task.py
     │   ├── discover.py
     │   └── doctor.py
     └── tests/

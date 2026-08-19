@@ -38,7 +38,7 @@ Do not assume the XDG environment variables are set.
 4. Discover available harnesses/models if the registry is stale or incomplete.
 5. Classify the task sufficiently for routing; avoid elaborate taxonomy when a simple classification is enough.
 6. Create a frozen task specification for implementation and independent test/review work.
-7. Initialize task counters for dispatches, rework rounds, spec revisions, and elapsed time when configured.
+7. Initialize task counters for dispatches, rework rounds, spec revisions, and elapsed time when configured with `scripts/task.py start`.
 
 See:
 
@@ -61,7 +61,7 @@ Use the following loop unless the task clearly warrants a simpler path:
    - `RETURN`: create semantic rework with the findings included in the initial rework context, if the rework budget remains.
    - `TAKE_OVER`: Senior finishes the task when Junior iteration is no longer efficient/reliable; verify the resulting work independently before completion.
    - `SPEC_DEFECT`: repair the specification only when intent can be recovered without inventing requirements; otherwise create an Owner gate.
-7. After every `RETURN`, `SPEC_DEFECT`, technical retry, or takeover decision, check configured limits before creating more work.
+7. After every `RETURN`, `SPEC_DEFECT`, technical retry, or takeover decision, use `scripts/task.py record` and `scripts/task.py status` to check configured limits before creating more work.
 8. Record the outcome, guardrail termination reason if any, and noteworthy observations.
 9. Ask the Project Owner only when a genuine gate remains or bounded autonomous recovery is exhausted and Senior takeover cannot safely finish the task.
 
