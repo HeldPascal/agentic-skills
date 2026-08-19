@@ -278,9 +278,20 @@ python scripts/state.py show capabilities
 python scripts/state.py aggregate
 python scripts/state.py compact
 python scripts/discover.py --write
+python scripts/state.py summary
+python scripts/state.py summary --human
 ```
 
 Prefer these helpers over free-form edits of structured state.
+
+`summary` is read-only: it never writes config, registry, capabilities, observations, aggregates, or task state. By default it prints one deterministic JSON object to stdout (`--human` prints a short text report of the same information instead); every top-level key is always present, even when zero/empty/null. It reports:
+
+- `schema_version`, `generated_at`.
+- `tasks`: `active_count`/`finished_count` from `tasks/<task_id>.json`, and `active` — one `task.py status_value()`-shaped object per active task, sorted by `task_id`.
+- `observations`: `execution`/`task`/`total` counts across active + archived observations, plus `active_file`/`archived` splitting active `observations.jsonl` from `archive/observations-*.jsonl`.
+- `capabilities`: whether `capabilities.json` exists, its `updated_at`, and `age_minutes` since then (`null` if absent).
+- `aggregates`: counts of tracked harnesses/models/combinations/role_combinations/task_types, rebuilt in-memory from `all_observations()` (not read from `aggregates.json`, so `summary` stays correct even if aggregates haven't been rebuilt).
+- `role_combinations`: the full finalized bucket (same shape as `aggregates.json`'s `role_combinations`) for every combination with at least one execution observation.
 
 ## Mutation rules
 

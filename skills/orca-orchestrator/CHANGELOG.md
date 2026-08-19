@@ -2,6 +2,10 @@
 
 All notable changes to the `orca-orchestrator` skill are documented here. This skill's `version` (in `SKILL.md` frontmatter) follows [Semantic Versioning](https://semver.org/): breaking changes to the state/config schema or the skill's behavioral contract bump the major version, additive changes bump the minor version, and clarifications/fixes bump the patch version.
 
+## 0.7.0
+
+- Added `scripts/state.py summary` (`--human` for text, JSON by default): a deterministic, read-only snapshot of active/finished tasks, execution/task observation counts (active + archived), capabilities freshness, and in-memory-rebuilt aggregate counts including full `role_combinations` buckets. Never writes any state file. See [state.md](skills/orca-orchestrator/references/state.md#helper-commands).
+
 ## 0.6.1
 
 - Reading `observations.jsonl`/archived observation files now rejects any record without a valid `kind` (`execution`/`task`) instead of silently defaulting it to `execution`. Pre-0.5.0 observations had no `kind` and could carry now-task-only fields; letting them default to `execution` would have leaked those fields into combination aggregates. See [state.md](skills/orca-orchestrator/references/state.md#migrating-from-pre-050-observations) for what to do if this triggers.

@@ -452,6 +452,10 @@ def test_pre_split_observation_without_kind_is_rejected_on_read(tmp_path: Path) 
     assert compact_result.returncode == 1
     assert "no valid 'kind'" in compact_result.stderr
 
+    summary_result = run_state(tmp_path, "summary")
+    assert summary_result.returncode == 1
+    assert "no valid 'kind'" in summary_result.stderr
+
 
 def test_manual_compact_is_noop_below_threshold(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
@@ -469,3 +473,181 @@ def test_manual_compact_is_noop_below_threshold(tmp_path: Path) -> None:
     result = run_state(tmp_path, "compact")
     assert result.returncode == 0, result.stderr
     assert "no compaction required" in result.stdout
+
+
+def test_summary_empty_state(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "summary").returncode == 0
+
+    result = run_state(tmp_path, "summary")
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    assert output["schema_version"] == 1
+    assert "generated_at" in output
+    assert output["tasks"]["active_count"] == 0
+    assert output["tasks"]["finished_count"] == 0
+    assert output["tasks"]["active"] == []
+    assert output["observations"]["execution"] == 0
+    assert output["observations"]["task"] == 0
+    assert output["observations"]["total"] == 0
+    assert output["observations"]["active_file"] == 0
+    assert output["observations"]["archived"] == 0
+    assert output["capabilities"]["present"] is False
+    assert output["capabilities"]["updated_at"] is None
+    assert output["capabilities"]["age_minutes"] is None
+    assert output["aggregates"]["harnesses_tracked"] == 0
+    assert output["aggregates"]["models_tracked"] == 0
+    assert output["aggregates"]["combinations_tracked"] == 0
+    assert output["aggregates"]["role_combinations_tracked"] == 0
+    assert output["aggregates"]["task_types_tracked"] == 0
+    assert output["role_combinations"] == {}
+
+
+def test_summary_with_one_task_and_observations(tmp_path: Path) -> None:
+    # For summary, tasks.show active tasks from tasks/<id>.json files
+    # When a task is finished, it still exists but status="finished" means active_count=0
+    # Let's test with an unfinished task to see it in the output
+
+    assert run_state(tmp_path, "init").returncode == 0
+
+    # Start a task but don't finish it yet
+    result = run_task(tmp_path, "start", "task-1")
+    assert result.returncode == 0
+
+    # Add an execution observation
+    observation = json.dumps(
+        {
+            "kind": "execution",
+            "task_id": "task-1",
+            "role": "developer",
+            "harness": "pi",
+            "model": "qwen/qwen3-coder-next",
+            "backend": "lmstudio",
+            "completed": True,
+        }
+    )
+    assert run_state(tmp_path, "observe", observation).returncode == 0
+
+    # Add a task observation (task must be finished first)
+    start_and_finish_task(tmp_path, "task-1")
+
+    task_obs = json.dumps({"kind": "task", "task_type": "implementation", "completed": True})
+    assert run_state(tmp_path, "observe", task_obs, "--task-id", "task-1").returncode == 0
+
+    # Create capabilities.json directly (avoid discover.py for simplicity)
+    caps_path = tmp_path / "state" / "orca-orchestrator" / "capabilities.json"
+    caps_value = {
+        "schema_version": 1,
+        "updated_at": "2026-08-19T14:00:00Z",
+        "tools": {},
+        "backends": {},
+        "cloud": {},
+    }
+    caps_path.write_text(json.dumps(caps_value))
+
+    result = run_state(tmp_path, "summary")
+    assert result.returncode == 0
+
+    output = json.loads(result.stdout)
+    assert output["schema_version"] == 1
+    assert "generated_at" in output
+
+    # Since we finished task-1, it's not active
+    assert output["tasks"]["active_count"] == 0
+    assert output["tasks"]["finished_count"] == 1
+
+    # active list should be empty for finished tasks
+    assert output["tasks"]["active"] == []
+
+    # Check observations
+    assert output["observations"]["execution"] == 1
+    assert output["observations"]["task"] == 1
+    assert output["observations"]["total"] == 2
+    assert output["observations"]["active_file"] == 2
+    assert output["observations"]["archived"] == 0
+
+    # Check capabilities
+    assert output["capabilities"]["present"] is True
+    assert output["capabilities"]["updated_at"] == "2026-08-19T14:00:00Z"
+    assert isinstance(output["capabilities"]["age_minutes"], float)
+    assert output["capabilities"]["age_minutes"] > 0
+
+    # Check aggregates
+    assert output["aggregates"]["harnesses_tracked"] == 1
+    assert output["aggregates"]["models_tracked"] == 1
+    assert output["aggregates"]["combinations_tracked"] == 1
+    assert output["aggregates"]["role_combinations_tracked"] == 1
+    assert output["aggregates"]["task_types_tracked"] == 1
+
+    role_combos = output["role_combinations"]
+    assert len(role_combos) == 1
+    key = "developer|pi|qwen/qwen3-coder-next|lmstudio|none|none"
+    assert key in role_combos
+    assert role_combos[key]["observations"] == 1
+
+
+def test_summary_with_active_task(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    result = run_task(tmp_path, "start", "task-1")
+    assert result.returncode == 0
+
+    # Don't finish - keep it active
+
+    caps_path = tmp_path / "state" / "orca-orchestrator" / "capabilities.json"
+    caps_value = {
+        "schema_version": 1,
+        "updated_at": "2026-08-19T14:00:00Z",
+        "tools": {},
+        "backends": {},
+        "cloud": {},
+    }
+    caps_path.write_text(json.dumps(caps_value))
+
+    result = run_state(tmp_path, "summary")
+    assert result.returncode == 0
+
+    output = json.loads(result.stdout)
+    assert output["tasks"]["active_count"] == 1
+    assert output["tasks"]["finished_count"] == 0
+    tasks = output["tasks"]["active"]
+    assert len(tasks) == 1
+    assert tasks[0]["task_id"] == "task-1"
+    assert tasks[0]["status"] == "active"
+
+
+def test_summary_human_format(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
+    result = run_state(tmp_path, "summary", "--human")
+    assert result.returncode == 0
+    assert not result.stdout.strip().startswith("{")
+    assert "State summary" in result.stdout
+
+
+def test_summary_does_not_mutate_state(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
+
+    obs = json.dumps({"kind": "execution", "task_id": "task-1", "role": "developer", "harness": "pi", "model": "qwen/qwen3-coder-next"})
+    assert run_state(tmp_path, "observe", obs).returncode == 0
+    caps_path = tmp_path / "state" / "orca-orchestrator" / "capabilities.json"
+    caps_path.write_text(json.dumps({
+        "schema_version": 1,
+        "updated_at": "2026-08-19T14:00:00Z",
+        "tools": {},
+        "backends": {},
+        "cloud": {},
+    }))
+
+    pre_files = {}
+    for p in (tmp_path / "state" / "orca-orchestrator").rglob("*"):
+        if p.is_file():
+            pre_files[str(p)] = (p.read_text(), p.stat().st_mtime)
+
+    result = run_state(tmp_path, "summary")
+    assert result.returncode == 0
+
+    for p in (tmp_path / "state" / "orca-orchestrator").rglob("*"):
+        if p.is_file():
+            content, mtime = pre_files[str(p)]
+            assert p.read_text() == content
+            assert p.stat().st_mtime == mtime

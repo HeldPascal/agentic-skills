@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+
 SCHEMA_VERSION = 1
 APP_NAME = "orca-orchestrator"
 
@@ -727,6 +728,127 @@ def show(kind: str) -> None:
     sys.stdout.write(path.read_text(encoding="utf-8"))
 
 
+def build_summary(*, human: bool) -> dict[str, Any] | str:
+    """Build the `summary` subcommand's data, read-only: never writes config,
+    registry, capabilities, observations, aggregates, or task state.
+
+    Task rows reuse task.py's `status_value` directly (imported lazily here,
+    since task.py imports this module at load time) rather than duplicating
+    its elapsed-time/limit-reached math. Aggregates are rebuilt in-memory
+    from `all_observations()` rather than read from aggregates.json, so the
+    summary is correct even if aggregates.json is stale.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import task as task_helper  # noqa: PLC0415
+
+    generated_at = utc_now()
+
+    cfg = load_config()
+    stale_after_days = int(cfg["compaction"]["stale_after_days"])
+    if stale_after_days < 0:
+        raise ValueError("compaction.stale_after_days must be >= 0")
+
+    observations = all_observations()
+    aggregates = build_aggregates(observations, stale_after_days=stale_after_days)
+
+    active_observations = read_jsonl(observations_path())
+    archived_count = len(observations) - len(active_observations)
+
+    execution_count = sum(1 for obs in observations if observation_kind(obs) == "execution")
+    task_obs_count = sum(1 for obs in observations if observation_kind(obs) == "task")
+
+    tasks_dir = state_root() / "tasks"
+    task_rows: list[dict[str, Any]] = []
+    finished_count = 0
+    if tasks_dir.exists():
+        for task_path in sorted(tasks_dir.glob("*.json")):
+            value = load_json(task_path)
+            if value.get("status") == "finished":
+                finished_count += 1
+                continue
+            task_rows.append(task_helper.status_value(value))
+    task_rows.sort(key=lambda row: row["task_id"])
+
+    caps_path = capabilities_path()
+    caps_present = caps_path.exists()
+    caps_updated_at: str | None = None
+    caps_age_minutes: float | None = None
+    if caps_present:
+        caps_value = load_json(caps_path)
+        caps_updated_at = caps_value.get("updated_at")
+        parsed = parse_timestamp(caps_updated_at)
+        if parsed is not None:
+            caps_age_minutes = (datetime.now(timezone.utc) - parsed).total_seconds() / 60.0
+
+    role_combinations = aggregates["role_combinations"]
+
+    if human:
+        lines = [
+            f"State summary (schema_version={SCHEMA_VERSION}, generated_at={generated_at})",
+            "",
+            f"Tasks: {len(task_rows)} active, {finished_count} finished",
+        ]
+        for row in task_rows:
+            lines.append(f"  {row['task_id']}: elapsed={row['elapsed_minutes']:.1f}m")
+        lines.append(
+            f"Observations: {execution_count} execution, {task_obs_count} task "
+            f"(total {execution_count + task_obs_count}; "
+            f"{len(active_observations)} active, {archived_count} archived)"
+        )
+        if caps_present:
+            lines.append(
+                f"Capabilities: present, updated_at={caps_updated_at}, "
+                f"age_minutes={caps_age_minutes:.1f}" if caps_age_minutes is not None
+                else f"Capabilities: present, updated_at={caps_updated_at}"
+            )
+        else:
+            lines.append("Capabilities: absent")
+        lines.append(
+            "Aggregates tracked: "
+            f"{len(aggregates['harnesses'])} harnesses, "
+            f"{len(aggregates['models'])} models, "
+            f"{len(aggregates['combinations'])} combinations, "
+            f"{len(role_combinations)} role_combinations, "
+            f"{len(aggregates['tasks'])} task_types"
+        )
+        for key, bucket in sorted(role_combinations.items()):
+            lines.append(
+                f"  {key}: {bucket['observations']} observations, "
+                f"completion_rate={bucket['completion_rate']}"
+            )
+        return "\n".join(lines)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "tasks": {
+            "active_count": len(task_rows),
+            "finished_count": finished_count,
+            "active": task_rows,
+        },
+        "observations": {
+            "execution": execution_count,
+            "task": task_obs_count,
+            "total": execution_count + task_obs_count,
+            "active_file": len(active_observations),
+            "archived": archived_count,
+        },
+        "capabilities": {
+            "present": caps_present,
+            "updated_at": caps_updated_at,
+            "age_minutes": caps_age_minutes,
+        },
+        "aggregates": {
+            "harnesses_tracked": len(aggregates["harnesses"]),
+            "models_tracked": len(aggregates["models"]),
+            "combinations_tracked": len(aggregates["combinations"]),
+            "role_combinations_tracked": len(role_combinations),
+            "task_types_tracked": len(aggregates["tasks"]),
+        },
+        "role_combinations": role_combinations,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -762,6 +884,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="archive older active observations according to configured thresholds",
     )
 
+    summary_parser = sub.add_parser("summary", help="print a deterministic summary of state")
+    summary_parser.add_argument(
+        "--human",
+        action="store_true",
+        help="print human-readable text instead of JSON",
+    )
+
     return parser
 
 
@@ -779,6 +908,12 @@ def main() -> int:
             print(f"updated aggregates at {aggregates_path()}")
         elif args.command == "compact":
             compact_state()
+        elif args.command == "summary":
+            result = build_summary(human=args.human)
+            if args.human:
+                print(result)
+            else:
+                print(json.dumps(result, indent=2, sort_keys=True))
         else:
             raise AssertionError(args.command)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
