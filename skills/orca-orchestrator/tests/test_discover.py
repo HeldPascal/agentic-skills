@@ -132,7 +132,7 @@ def test_discover_includes_cloud_entry_only_for_available_tools(monkeypatch):
 
     result = discover.discover()
     assert set(result["cloud"]) == {"claude"}
-    assert result["cloud"]["claude"]["known_effort_levels"] == ["low", "medium", "high"]
+    assert result["cloud"]["claude"]["effort_configurable"] is True
     assert result["cloud"]["claude"]["any_present"] is False
 
 

@@ -100,11 +100,16 @@ Future versions may add token or monetary budgets when those metrics are reliabl
 
 When a worker is blocked waiting for an answer, do not wait indefinitely.
 
-After `blocking_wait_minutes`:
+`blocking_wait_minutes` is snapshotted into the task at `task.py start` like the other limits, so it cannot silently change mid-task if config is edited later. Call `scripts/task.py block-start <task_id>` when a block begins and `scripts/task.py status <task_id>` to check `blocking_elapsed_minutes`/`limit_reached.blocking_wait_minutes` deterministically, instead of estimating elapsed wait time yourself.
+
+After `blocking_wait_minutes` (`limit_reached.blocking_wait_minutes` is `true`):
 
 - route technical or repository-resolvable questions to a Senior or Orchestrator capable of answering them,
 - route owner-intent or consequential scope questions to an Owner gate,
-- cancel or replace stale blocked work when the answer is no longer useful.
+- cancel or replace stale blocked work when the answer is no longer useful,
+- record the resolution with `scripts/task.py record --event blocking_timeout`, which also clears the blocking-wait marker.
+
+If the worker is unblocked before the limit is reached, call `scripts/task.py block-clear <task_id>` instead — this does not count as a timeout and does not increment `blocking_timeouts`.
 
 A timeout is an escalation trigger, not permission to invent missing intent.
 

@@ -41,7 +41,7 @@ Do not conflate these last two. `registry.json` answers "what do we believe abou
 
 `tasks/<task_id>.json` is short-lived, per-task guardrail bookkeeping. It is distinct from raw observations, deterministic aggregates, and qualitative registry beliefs: it is not learned evidence and is not compacted or archived like observations.
 
-Each file has `schema_version`, `task_id`, `started_at`, nullable `finished_at`, `status`, nullable `termination_reason`, a snapshot of the task's `limits`, and `counters` for dispatches, rework rounds, specification revisions, technical retries, and blocking timeouts. Computed status also includes elapsed minutes and booleans indicating whether each bounded dispatch, rework, specification-revision, or elapsed-time limit has been reached. A `null` limit has no ceiling.
+Each file has `schema_version`, `task_id`, `started_at`, nullable `finished_at`, `status`, nullable `termination_reason`, a snapshot of the task's `limits` (including `blocking_wait_minutes`, snapshotted like the other limits so a later config edit cannot change the policy for an already-running task), nullable `blocking_started_at`, and `counters` for dispatches, rework rounds, specification revisions, technical retries, and blocking timeouts. Computed status also includes `elapsed_minutes`, `blocking_elapsed_minutes` (`null` when not currently blocked), and booleans indicating whether each bounded dispatch, rework, specification-revision, elapsed-time, or blocking-wait limit has been reached. A `null` limit has no ceiling.
 
 Use the helper rather than editing these files directly:
 
@@ -49,6 +49,8 @@ Use the helper rather than editing these files directly:
 python scripts/task.py start <task_id> [--limits-json '{"max_rework_rounds": 3}']
 python scripts/task.py record <task_id> --event dispatch
 python scripts/task.py status <task_id>
+python scripts/task.py block-start <task_id>
+python scripts/task.py block-clear <task_id>
 python scripts/task.py finish <task_id> [--termination-reason dispatch_limit_reached]
 ```
 
@@ -88,17 +90,28 @@ The limits are task-level policy. A `null` elapsed-time limit means that no gene
 
 ## Observation schema
 
-Observations are immutable records. Fields may be omitted when unknown.
+Observations are immutable records. Every observation has a `kind`, and it is required:
 
-`role` distinguishes `developer`/`tester`/`reviewer` work (see [workflow.md](workflow.md#roles)) and is independent of `task_type`. `host` is `local` or `cloud`. `effort` records the requested reasoning/thinking-effort level for cloud harnesses that expose one (e.g. `low`/`medium`/`high`); leave it `null` for harnesses/backends without a configurable effort dimension. `effort` is a routing dimension analogous to `model_variant` for local quantization: the same model/harness at a different effort level is effectively a different combination and should be tracked separately when the harness/backend support varying it.
+- `kind: "execution"` — one worker's dispatch in one role (Developer, Tester, or Reviewer). Carries a well-defined `harness`/`model`/`backend`, because it describes what actually ran. A task with separate Developer/Tester/Reviewer dispatches (see [workflow.md](workflow.md#roles)) produces one execution observation per dispatch, not one per task.
+- `kind: "task"` — the task's overall outcome, recorded once per task. No single `harness`/`model` applies to a task that may have used three different combinations across its roles, so this kind omits them and instead carries task-level fields: `owner_interventions`, final `review_verdict`, total `rework_rounds`, `takeover`, `termination_reason`.
+
+Do not put task-level fields (`owner_interventions`, final `review_verdict`, total `rework_rounds`) on an execution observation, and do not put a `harness`/`model` on a task observation. Mixing them is exactly what makes aggregates uninterpretable: a combination's "review_verdicts" count would silently mix per-dispatch and per-task verdicts, and a task's total rework count could get attributed to whichever role happened to log it. `scripts/state.py` enforces the field split (see [Required fields](#required-fields)) and computes separate aggregate views for each kind (see [Deterministic aggregates](#deterministic-aggregates)).
+
+Fields may be omitted when unknown, subject to the required-field minimum for the observation's kind.
+
+`role` distinguishes `developer`/`tester`/`reviewer` execution observations (see [workflow.md](workflow.md#roles)); `level` (`junior`/`senior`) records who ran it but is not part of the aggregation key (see [Deterministic aggregates](#deterministic-aggregates)) to avoid fragmenting evidence too finely. `host` is `local` or `cloud`. `effort` records the requested reasoning/thinking-effort level for cloud harnesses that expose one; leave it `null` for harnesses/backends without a configurable effort dimension — do not invent a value. `effort` and `model_variant` are both part of the combination key: the same model/harness at a different effort level or quantization is treated as a different combination for routing purposes (see [routing.md](routing.md#locality-and-effort)).
+
+Execution observation:
 
 ```json
 {
   "schema_version": 1,
   "timestamp": "2026-08-19T08:00:00Z",
+  "kind": "execution",
+  "task_id": "task-2026-08-19-configurable-cost-backend",
   "task_type": "implementation",
-  "task_summary": "Implement configurable cost backend",
   "role": "developer",
+  "level": "junior",
   "harness": "pi",
   "harness_version": "0.84.2",
   "model": "qwen/qwen3-coder-next",
@@ -107,19 +120,42 @@ Observations are immutable records. Fields may be omitted when unknown.
   "host": "local",
   "effort": null,
   "completed": true,
-  "owner_interventions": 0,
-  "review_verdict": "RETURN",
-  "blocking_findings": 2,
-  "dispatches": 2,
-  "rework_rounds": 0,
-  "rework_success": null,
-  "takeover": false,
-  "termination_reason": null,
   "notes": [
     "Several generated tests called torch.allclose without asserting the result"
   ]
 }
 ```
+
+Task observation:
+
+```json
+{
+  "schema_version": 1,
+  "timestamp": "2026-08-19T08:05:00Z",
+  "kind": "task",
+  "task_id": "task-2026-08-19-configurable-cost-backend",
+  "task_type": "implementation",
+  "task_summary": "Implement configurable cost backend",
+  "completed": true,
+  "owner_interventions": 0,
+  "review_verdict": "APPROVE",
+  "dispatches": 3,
+  "rework_rounds": 1,
+  "spec_revisions": 0,
+  "technical_retries": 0,
+  "blocking_timeouts": 0,
+  "takeover": false,
+  "termination_reason": null,
+  "notes": []
+}
+```
+
+### Required fields
+
+- `execution`: `task_id`, `role`, `harness`, `model`.
+- `task`: `task_id`, `task_type`.
+
+`task_id` links both kinds to the same task and to `tasks/<task_id>.json` (see [Task guardrail state](#task-guardrail-state)). Use `scripts/state.py observe --task-id <task_id> '...'` for a `task`-kind observation instead of retyping the counters by hand: it fills `dispatches`, `rework_rounds`, `spec_revisions`, `technical_retries`, `blocking_timeouts`, and `termination_reason` from the task's own deterministic guardrail state, so the learned record can never drift from what `task.py` actually counted. Explicit values already present in the JSON body take precedence over the filled-in ones. `--task-id` also works for `execution`-kind observations, where it only stamps `task_id` (no counters to fill).
 
 `termination_reason` values are defined in [guardrails.md](guardrails.md#budget-exhaustion-record); reuse them verbatim here rather than inventing new spellings.
 
@@ -127,13 +163,17 @@ Do not fabricate missing metrics. Unknown is preferable to false precision.
 
 ## Deterministic aggregates
 
-`aggregates.json` is rebuilt from both active and archived raw observations. It should contain auditable statistics grouped by:
+`aggregates.json` is rebuilt from both active and archived raw observations. `harnesses`, `models`, `combinations`, and `role_combinations` are derived **only from `kind: "execution"` observations** — a task observation has no single harness/model to attribute. `tasks` is derived **only from `kind: "task"` observations**. This split is what keeps a combination's stats from silently mixing per-dispatch execution outcomes with per-task outcomes; see [Observation schema](#observation-schema) for why that distinction matters.
 
-- harness,
-- model,
-- harness/model/backend/effort combination (key format `harness|model|backend|effort`, using `unknown`/`none` placeholders for missing fields).
+- `harnesses`: keyed by harness.
+- `models`: keyed by model.
+- `combinations`: keyed by `harness|model|backend|effort|model_variant` (`unknown`/`none` placeholders for missing fields). This is "what configuration was actually run", independent of which role used it.
+- `role_combinations`: keyed by `role|harness|model|backend|effort|model_variant`. Use this, not `combinations`, when the question is role-specific fitness (e.g. "is this combination a good Reviewer" vs. "is this combination good in general") — `combinations` deliberately mixes Developer/Tester/Reviewer evidence for the same configuration together.
+- `tasks`: keyed by `task_type`, built from `kind: "task"` observations only — task-level completion rate, mean owner interventions, final-review-verdict distribution, mean total rework rounds, takeover rate, and termination-reason distribution.
 
-The combination key includes `effort` because the same harness/model/backend at a different cloud effort level is treated as a distinct combination for routing purposes (see [routing.md](routing.md#locality-and-effort)).
+Grouping by every plausible dimension at once (harness × model × backend × effort × variant × role × host) was deliberately avoided: it fragments evidence into buckets too sparse to be useful. `combinations` and `role_combinations` are the two projections that matter most in practice (what was run, and who used it); reason over raw observations directly (see [Evidence hierarchy](routing.md#evidence-hierarchy)) for finer-grained questions the precomputed aggregates don't answer, rather than adding another grouping dimension by default.
+
+`host` is intentionally not part of any key: it correlates strongly with `backend` (e.g. `lmstudio` implies local) and with whether `effort` is set (cloud harnesses expose effort; local backends generally do not), so a separate `host` dimension would mostly duplicate information already carried by those two fields.
 
 Useful metrics include:
 
@@ -161,9 +201,12 @@ The registry is a compact derived view that helps routing:
   "updated_at": "2026-08-19T08:00:00Z",
   "harnesses": {},
   "models": {},
-  "combinations": {}
+  "combinations": {},
+  "role_combinations": {}
 }
 ```
+
+`role_combinations` mirrors `aggregates.json`'s role-specific view (see [Deterministic aggregates](#deterministic-aggregates)): use it for beliefs like "strong Developer, weak Reviewer" that `combinations` alone cannot express.
 
 Entries should summarize evidence rather than encode immutable rules. Recommended fields include:
 
@@ -190,7 +233,9 @@ Qualitative registry beliefs should remain traceable to supporting raw observati
 }
 ```
 
-`tools`, `backends`, and `cloud` mirror `discover.py`'s stdout output (see [routing.md](routing.md#discovery)): installed CLI availability/version, local backend model listings (e.g. LM Studio), and per-harness cloud-auth signal plus known effort levels. Each `--write` run fully replaces the prior snapshot with what was just observed — there is no history here; use `observations.jsonl` if you need history of what was actually used.
+`tools`, `backends`, and `cloud` mirror `discover.py`'s stdout output (see [routing.md](routing.md#discovery)): installed CLI availability/version, local backend model listings (e.g. LM Studio), and per-harness cloud-auth signal plus whether the harness is known to expose a configurable effort dimension. Each `--write` run fully replaces the prior snapshot with what was just observed — there is no history here; use `observations.jsonl` if you need history of what was actually used.
+
+`capabilities.json` says what was locally detectable, not what is definitively reachable. The `cloud.<harness>.any_present` signal is a heuristic based on common API-key environment variables; a harness that authenticates through its own login flow (for example a CLI that stores an OAuth token in its own config file rather than an env var) can be fully usable in the cloud even when `any_present` is `false`. Treat a `false` signal as "unconfirmed", not "unavailable" — verify with a real dispatch when it matters, rather than routing away from a harness solely because this heuristic didn't find a key.
 
 ## Compaction
 
@@ -198,7 +243,7 @@ The active `observations.jsonl` should remain small enough to load recent releva
 
 Compaction is deterministic and script-driven:
 
-1. Group active observations by harness/model/backend/effort combination.
+1. Group active observations: `execution`-kind observations by their combination key (`harness|model|backend|effort|model_variant`), `task`-kind observations by `task|<task_type>`. The two kinds are never grouped together, mirroring how aggregates keep them separate.
 2. When a group exceeds `max_active_observations_per_combination`, select the oldest observations in that group.
 3. Archive at least `archive_batch_size_per_combination` observations (or enough to return under the active threshold, whichever is larger).
 4. Write selected observations to `archive/observations-*.jsonl`.
@@ -215,7 +260,8 @@ The state helper exposes the baseline operations:
 
 ```bash
 python scripts/state.py init
-python scripts/state.py observe '{"task_type":"implementation","harness":"pi","model":"qwen/qwen3-coder-next"}'
+python scripts/state.py observe '{"kind":"execution","task_id":"task-1","role":"developer","harness":"pi","model":"qwen/qwen3-coder-next"}'
+python scripts/state.py observe --task-id task-1 '{"kind":"task","task_type":"implementation","review_verdict":"APPROVE"}'
 python scripts/state.py show observations
 python scripts/state.py show aggregates
 python scripts/state.py show registry

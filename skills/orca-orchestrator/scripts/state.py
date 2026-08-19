@@ -196,6 +196,7 @@ def init_state() -> None:
                 "harnesses": {},
                 "models": {},
                 "combinations": {},
+                "role_combinations": {},
             },
         )
     else:
@@ -258,7 +259,27 @@ def combination_key(value: dict[str, Any]) -> str:
     model = str(value.get("model") or "unknown")
     backend = str(value.get("backend") or "unknown")
     effort = str(value.get("effort") or "none")
-    return f"{harness}|{model}|{backend}|{effort}"
+    variant = str(value.get("model_variant") or "none")
+    return f"{harness}|{model}|{backend}|{effort}|{variant}"
+
+
+def role_combination_key(value: dict[str, Any]) -> str:
+    role = str(value.get("role") or "unknown")
+    return f"{role}|{combination_key(value)}"
+
+
+def observation_kind(value: dict[str, Any]) -> str:
+    return str(value.get("kind") or "execution")
+
+
+def observation_group_key(value: dict[str, Any]) -> str:
+    """Group key used for compaction thresholds; mirrors the aggregation split
+    between execution observations (grouped by combination) and task
+    observations (grouped by task type), so unrelated kinds are never merged
+    into the same active/archive bucket."""
+    if observation_kind(value) == "task":
+        return f"task|{value.get('task_type') or 'unknown'}"
+    return combination_key(value)
 
 
 def new_bucket() -> dict[str, Any]:
@@ -342,19 +363,36 @@ def build_aggregates(
     *,
     stale_after_days: int,
 ) -> dict[str, Any]:
+    """Build deterministic aggregates from raw observations.
+
+    `harnesses`/`models`/`combinations`/`role_combinations` are derived only
+    from `kind: "execution"` observations, since only those carry a
+    well-defined harness/model/backend. `tasks` is derived only from
+    `kind: "task"` observations (one per task, holding task-level outcome
+    fields such as owner_interventions/review_verdict/rework_rounds), so a
+    task's final outcome is never double-counted across its per-role
+    execution observations. See references/state.md#observation-schema.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=stale_after_days)
 
     harnesses: dict[str, dict[str, Any]] = defaultdict(new_bucket)
     models: dict[str, dict[str, Any]] = defaultdict(new_bucket)
     combinations: dict[str, dict[str, Any]] = defaultdict(new_bucket)
+    role_combinations: dict[str, dict[str, Any]] = defaultdict(new_bucket)
+    tasks: dict[str, dict[str, Any]] = defaultdict(new_bucket)
 
     for observation in observations:
+        if observation_kind(observation) == "task":
+            task_type = str(observation.get("task_type") or "unknown")
+            update_bucket(tasks[task_type], observation, cutoff)
+            continue
+
         harness = str(observation.get("harness") or "unknown")
         model = str(observation.get("model") or "unknown")
-        combo = combination_key(observation)
         update_bucket(harnesses[harness], observation, cutoff)
         update_bucket(models[model], observation, cutoff)
-        update_bucket(combinations[combo], observation, cutoff)
+        update_bucket(combinations[combination_key(observation)], observation, cutoff)
+        update_bucket(role_combinations[role_combination_key(observation)], observation, cutoff)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -365,6 +403,10 @@ def build_aggregates(
         "combinations": {
             key: finalize_bucket(value) for key, value in sorted(combinations.items())
         },
+        "role_combinations": {
+            key: finalize_bucket(value) for key, value in sorted(role_combinations.items())
+        },
+        "tasks": {key: finalize_bucket(value) for key, value in sorted(tasks.items())},
     }
 
 
@@ -378,7 +420,45 @@ def write_aggregates() -> None:
     write_json_atomic(aggregates_path(), value)
 
 
-def append_observation(raw: str) -> None:
+# Required fields differ by kind: an "execution" observation describes one
+# role's dispatch (needs a harness/model to be a meaningful combination
+# data point) and a "task" observation describes the whole task's outcome
+# (no single harness/model applies). See references/state.md#observation-schema.
+REQUIRED_FIELDS_BY_KIND = {
+    "execution": ("task_id", "role", "harness", "model"),
+    "task": ("task_id", "task_type"),
+}
+
+# task.py counters that a "task"-kind observation should inherit from the
+# task's own deterministic guardrail state rather than have the LLM retype,
+# so the two never drift apart.
+TASK_COUNTER_FIELDS = (
+    "dispatches",
+    "rework_rounds",
+    "spec_revisions",
+    "technical_retries",
+    "blocking_timeouts",
+)
+
+
+def task_state_path(task_id: str) -> Path:
+    if not task_id or "/" in task_id or "\\" in task_id or ".." in task_id:
+        raise ValueError("task_id must not be empty or contain '/', '\\', or '..'")
+    return state_root() / "tasks" / f"{task_id}.json"
+
+
+def load_task_state(task_id: str) -> dict[str, Any] | None:
+    path = task_state_path(task_id)
+    if not path.exists():
+        return None
+    value = load_json(path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: task state must be a JSON object")
+    ensure_supported_schema(value, f"task {task_id!r}")
+    return value
+
+
+def append_observation(raw: str, *, task_id: str | None = None) -> None:
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("observation must be a JSON object")
@@ -387,7 +467,26 @@ def append_observation(raw: str) -> None:
     value.setdefault("timestamp", utc_now())
     ensure_supported_schema(value, "observation")
 
-    required = ("task_type", "harness", "model")
+    kind = value.get("kind")
+    if kind not in REQUIRED_FIELDS_BY_KIND:
+        raise ValueError(
+            "observation must set 'kind' to one of: "
+            + ", ".join(sorted(REQUIRED_FIELDS_BY_KIND))
+        )
+
+    if task_id is not None:
+        value.setdefault("task_id", task_id)
+        task_state = load_task_state(task_id)
+        if task_state is None:
+            raise ValueError(f"task {task_id!r} not started; run 'task.py start' first")
+        if kind == "task":
+            counters = task_state["counters"]
+            for field in TASK_COUNTER_FIELDS:
+                value.setdefault(field, counters[field])
+            if task_state.get("termination_reason") is not None:
+                value.setdefault("termination_reason", task_state["termination_reason"])
+
+    required = REQUIRED_FIELDS_BY_KIND[kind]
     missing = [field for field in required if not value.get(field)]
     if missing:
         raise ValueError(f"observation missing required field(s): {', '.join(missing)}")
@@ -415,7 +514,7 @@ def maybe_compact() -> None:
     active = read_jsonl(observations_path())
     counts: dict[str, int] = defaultdict(int)
     for observation in active:
-        counts[combination_key(observation)] += 1
+        counts[observation_group_key(observation)] += 1
     if any(count > max_active for count in counts.values()):
         compact_state(quiet=True)
 
@@ -453,7 +552,7 @@ def compact_state(*, quiet: bool = False) -> None:
     active = read_jsonl(observations_path())
     grouped: dict[str, list[int]] = defaultdict(list)
     for index, observation in enumerate(active):
-        grouped[combination_key(observation)].append(index)
+        grouped[observation_group_key(observation)].append(index)
 
     selected: set[int] = set()
     for indices in grouped.values():
@@ -541,6 +640,15 @@ def build_parser() -> argparse.ArgumentParser:
         "json",
         help="observation as a JSON object; schema_version/timestamp are added if omitted",
     )
+    observe.add_argument(
+        "--task-id",
+        help=(
+            "stamp task_id onto the observation and, for kind:task, fill "
+            "dispatch/rework/spec-revision/retry/blocking counters and "
+            "termination_reason from tasks/<task_id>.json instead of "
+            "retyping them (explicit values in the JSON body still win)"
+        ),
+    )
 
     show_parser = sub.add_parser("show", help="show current state")
     show_parser.add_argument(
@@ -565,7 +673,7 @@ def main() -> int:
         if args.command == "init":
             init_state()
         elif args.command == "observe":
-            append_observation(args.json)
+            append_observation(args.json, task_id=args.task_id)
         elif args.command == "show":
             show(args.kind)
         elif args.command == "aggregate":

@@ -6,10 +6,14 @@ CLIs, a local LM Studio backend, and environment variables that commonly
 indicate cloud credentials are configured. It cannot enumerate which cloud
 models an account can currently reach, nor query available reasoning/effort
 levels: cloud providers do not expose a generic "list models and effort
-levels for this key" API, and effort is a request-time parameter, not a
-queryable model property. Treat `cloud_auth_signal` as a heuristic hint, not
-proof of working cloud access, and treat `known_effort_levels` as static
-capability metadata to keep in sync with provider docs, not a live probe.
+levels for this key" API, and effort is a request-time parameter of a given
+model/provider, not a harness-wide constant — it also changes faster than a
+hardcoded list can track (new levels ship with new model versions). Treat
+`cloud_auth_signal` as a heuristic hint, not proof of working cloud access.
+For effort, this script only reports whether the harness is known to expose
+*some* configurable effort dimension (`effort_configurable`); it does not
+enumerate specific level names. Look up current level names from the model
+you actually selected, not from this script.
 """
 
 from __future__ import annotations
@@ -46,15 +50,12 @@ CLOUD_AUTH_ENV = {
     "qwen": ["DASHSCOPE_API_KEY", "OPENAI_API_KEY"],
 }
 
-# Static, human-maintained capability metadata: effort/reasoning-level
-# options known to be configurable for cloud-capable harnesses. Update this
-# table when provider documentation changes; do not attempt to derive it
-# dynamically.
-KNOWN_EFFORT_LEVELS = {
-    "codex": ["low", "medium", "high"],
-    "claude": ["low", "medium", "high"],
-    "pi": ["low", "medium", "high"],
-}
+# Harnesses known to expose *some* request-time effort/reasoning-budget
+# control for at least one supported model. Deliberately not an enumeration
+# of level names: those are a model/provider property that changes with
+# each model release, not a stable harness-wide constant, and a hardcoded
+# name list would go stale faster than this skill gets updated.
+EFFORT_CONFIGURABLE_HARNESSES = {"codex", "claude", "pi"}
 
 
 def command_version(command: list[str]) -> dict[str, object]:
@@ -127,7 +128,7 @@ def discover() -> dict[str, object]:
         "cloud": {
             name: {
                 **cloud_auth_signal(name),
-                "known_effort_levels": KNOWN_EFFORT_LEVELS.get(name, []),
+                "effort_configurable": name in EFFORT_CONFIGURABLE_HARNESSES,
             }
             for name in CLOUD_AUTH_ENV
             if tools.get(name, {}).get("available")

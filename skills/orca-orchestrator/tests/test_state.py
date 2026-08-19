@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "state.py"
+TASK_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "task.py"
 
 
 def run_state(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -22,18 +23,33 @@ def run_state(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_task(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["XDG_CONFIG_HOME"] = str(tmp_path / "config")
+    env["XDG_STATE_HOME"] = str(tmp_path / "state")
+    return subprocess.run(
+        [sys.executable, str(TASK_SCRIPT), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_init_creates_expected_files(tmp_path: Path) -> None:
     result = run_state(tmp_path, "init")
     assert result.returncode == 0, result.stderr
 
     config = tmp_path / "config" / "orca-orchestrator" / "config.json"
     registry = tmp_path / "state" / "orca-orchestrator" / "registry.json"
+    capabilities = tmp_path / "state" / "orca-orchestrator" / "capabilities.json"
     aggregates = tmp_path / "state" / "orca-orchestrator" / "aggregates.json"
     observations = tmp_path / "state" / "orca-orchestrator" / "observations.jsonl"
     archive = tmp_path / "state" / "orca-orchestrator" / "archive"
 
     assert config.exists()
     assert registry.exists()
+    assert capabilities.exists()
     assert aggregates.exists()
     assert observations.exists()
     assert archive.is_dir()
@@ -45,6 +61,7 @@ def test_init_creates_expected_files(tmp_path: Path) -> None:
     assert config_value["limits"]["max_dispatches"] == 8
     assert config_value["compaction"]["max_active_observations_per_combination"] == 50
     assert json.loads(registry.read_text())["schema_version"] == 1
+    assert json.loads(capabilities.read_text())["schema_version"] == 1
     assert json.loads(aggregates.read_text())["schema_version"] == 1
 
 
@@ -62,11 +79,16 @@ def test_init_preserves_explicit_config_and_adds_new_defaults(tmp_path: Path) ->
     assert value["compaction"]["stale_after_days"] == 90
 
 
-def test_observe_appends_observation_and_updates_aggregates(tmp_path: Path) -> None:
+def test_observe_execution_updates_combination_and_role_combination_aggregates(
+    tmp_path: Path,
+) -> None:
     assert run_state(tmp_path, "init").returncode == 0
 
     observation = json.dumps(
         {
+            "kind": "execution",
+            "task_id": "task-1",
+            "role": "developer",
             "task_type": "implementation",
             "harness": "pi",
             "model": "qwen/qwen3-coder-next",
@@ -90,19 +112,104 @@ def test_observe_appends_observation_and_updates_aggregates(tmp_path: Path) -> N
     aggregates = json.loads(
         (tmp_path / "state" / "orca-orchestrator" / "aggregates.json").read_text()
     )
-    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio|none"]
+    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio|none|none"]
     assert combo["observations"] == 1
     assert combo["completed"] == 1
     assert combo["completion_rate"] == 1.0
     assert combo["review_verdicts"] == {"RETURN": 1}
     assert combo["mean_rework_rounds"] == 1.0
 
+    role_combo = aggregates["role_combinations"][
+        "developer|pi|qwen/qwen3-coder-next|lmstudio|none|none"
+    ]
+    assert role_combo["observations"] == 1
+    assert aggregates["tasks"] == {}
 
-def test_observe_rejects_missing_required_fields(tmp_path: Path) -> None:
+
+def test_observe_rejects_missing_kind(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
     result = run_state(tmp_path, "observe", '{"task_type":"implementation"}')
     assert result.returncode == 1
+    assert "kind" in result.stderr
+
+
+def test_observe_execution_rejects_missing_required_fields(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    result = run_state(
+        tmp_path, "observe", '{"kind":"execution","task_id":"t1","harness":"pi"}'
+    )
+    assert result.returncode == 1
     assert "missing required field" in result.stderr
+    assert "role" in result.stderr
+    assert "model" in result.stderr
+
+
+def test_observe_task_kind_updates_task_aggregate_not_combinations(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+
+    observation = json.dumps(
+        {
+            "kind": "task",
+            "task_id": "task-1",
+            "task_type": "implementation",
+            "completed": True,
+            "owner_interventions": 1,
+            "review_verdict": "APPROVE",
+            "rework_rounds": 2,
+        }
+    )
+    result = run_state(tmp_path, "observe", observation)
+    assert result.returncode == 0, result.stderr
+
+    aggregates = json.loads(
+        (tmp_path / "state" / "orca-orchestrator" / "aggregates.json").read_text()
+    )
+    assert aggregates["combinations"] == {}
+    assert aggregates["role_combinations"] == {}
+    task_bucket = aggregates["tasks"]["implementation"]
+    assert task_bucket["observations"] == 1
+    assert task_bucket["completed"] == 1
+    assert task_bucket["review_verdicts"] == {"APPROVE": 1}
+    assert task_bucket["mean_rework_rounds"] == 2.0
+
+
+def test_observe_task_kind_requires_task_type(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    result = run_state(tmp_path, "observe", '{"kind":"task","task_id":"t1"}')
+    assert result.returncode == 1
+    assert "task_type" in result.stderr
+
+
+def test_observe_with_task_id_fills_counters_from_task_state(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    assert run_task(tmp_path, "start", "task-1").returncode == 0
+    assert run_task(tmp_path, "record", "task-1", "--event", "rework").returncode == 0
+    assert run_task(tmp_path, "record", "task-1", "--event", "rework").returncode == 0
+    assert run_task(tmp_path, "record", "task-1", "--event", "dispatch").returncode == 0
+    assert (
+        run_task(tmp_path, "finish", "task-1", "--termination-reason", "rework_limit_reached")
+        .returncode
+        == 0
+    )
+
+    observation = json.dumps({"kind": "task", "task_type": "implementation", "completed": True})
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 0, result.stderr
+
+    obs_path = tmp_path / "state" / "orca-orchestrator" / "observations.jsonl"
+    row = json.loads(obs_path.read_text().splitlines()[0])
+    assert row["task_id"] == "task-1"
+    assert row["rework_rounds"] == 2
+    assert row["dispatches"] == 1
+    assert row["termination_reason"] == "rework_limit_reached"
+
+
+def test_observe_with_task_id_fails_if_task_not_started(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    observation = json.dumps({"kind": "task", "task_type": "implementation"})
+    result = run_state(tmp_path, "observe", observation, "--task-id", "never-started")
+    assert result.returncode == 1
+    assert "not started" in result.stderr
 
 
 def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
@@ -120,6 +227,9 @@ def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
         observation = json.dumps(
             {
                 "timestamp": f"2026-08-19T08:0{index}:00Z",
+                "kind": "execution",
+                "task_id": f"task-{index}",
+                "role": "developer",
                 "task_type": "implementation",
                 "harness": "pi",
                 "model": "qwen/qwen3-coder-next",
@@ -150,16 +260,45 @@ def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
     aggregates = json.loads(
         (tmp_path / "state" / "orca-orchestrator" / "aggregates.json").read_text()
     )
-    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio|none"]
+    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio|none|none"]
     assert combo["observations"] == 3
     assert combo["completed"] == 2
+
+
+def test_execution_and_task_observations_compact_in_separate_groups(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+
+    config = tmp_path / "config" / "orca-orchestrator" / "config.json"
+    value = json.loads(config.read_text())
+    value["compaction"]["max_active_observations_per_combination"] = 1
+    value["compaction"]["archive_batch_size_per_combination"] = 1
+    config.write_text(json.dumps(value))
+
+    execution = json.dumps(
+        {
+            "kind": "execution",
+            "task_id": "task-1",
+            "role": "developer",
+            "harness": "pi",
+            "model": "qwen/qwen3-coder-next",
+        }
+    )
+    task = json.dumps({"kind": "task", "task_id": "task-1", "task_type": "implementation"})
+    assert run_state(tmp_path, "observe", execution).returncode == 0
+    assert run_state(tmp_path, "observe", task).returncode == 0
+
+    active_path = tmp_path / "state" / "orca-orchestrator" / "observations.jsonl"
+    active_kinds = {json.loads(line)["kind"] for line in active_path.read_text().splitlines()}
+    assert active_kinds == {"execution", "task"}
 
 
 def test_manual_compact_is_noop_below_threshold(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
     observation = json.dumps(
         {
-            "task_type": "implementation",
+            "kind": "execution",
+            "task_id": "task-1",
+            "role": "tester",
             "harness": "opencode",
             "model": "qwen/qwen3-coder-next",
         }

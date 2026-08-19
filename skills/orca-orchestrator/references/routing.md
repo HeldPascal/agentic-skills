@@ -24,7 +24,7 @@ Avoid overly detailed classifications when evidence is sparse.
 
 `scripts/discover.py` reports what can actually be observed locally: installed harness CLIs and their versions, models currently served by a local LM Studio backend, and — for harnesses with a known cloud mode — a heuristic cloud-auth signal (presence of common API-key environment variables) plus a static table of known effort/reasoning levels.
 
-It deliberately does **not** enumerate which cloud models an account/key can reach, and cannot discover effort levels dynamically: cloud providers do not expose a generic "list models and effort levels for this key" endpoint, and effort is a request-time parameter rather than a queryable model property. Keep `KNOWN_EFFORT_LEVELS` in `discover.py` in sync with current provider documentation instead of trying to probe it.
+It deliberately does **not** enumerate which cloud models an account/key can reach, and does not enumerate specific effort-level names: cloud providers do not expose a generic "list models and effort levels for this key" endpoint, and level names (`low`/`medium`/`high`/`xhigh`/...) are a model/provider property that changes with each model release, not a stable harness-wide constant. It only reports `effort_configurable: true|false` per cloud harness — whether *some* effort control is known to exist — and leaves the actual level names to be looked up for the model you selected.
 
 Run `scripts/discover.py --write`:
 
@@ -130,7 +130,7 @@ Never start another Junior rework round after `max_rework_rounds` is reached.
 
 Independence requirements for the Reviewer role are defined in [guardrails.md](guardrails.md#reviewer-independence-fallback); this section is only about which combination to route to within that constraint.
 
-Reviewer selection can learn from evidence like any other role. A model/harness combination that is strong at implementation is not automatically the best reviewer. `aggregates.json` groups by harness/model/backend/effort only, not by role, so when reasoning about reviewer fitness, weight raw observations that carry `role: reviewer` (see [state.md](state.md#observation-schema)) more heavily than the combination-level aggregate, which mixes all roles together.
+Reviewer selection can learn from evidence like any other role. A model/harness combination that is strong at implementation is not automatically the best reviewer. Use `aggregates.json`'s `role_combinations` view (keyed `role|harness|model|backend|effort|model_variant`, see [state.md](state.md#deterministic-aggregates)) for reviewer fitness, not the role-agnostic `combinations` view, which deliberately mixes Developer/Tester/Reviewer evidence for the same configuration together.
 
 ## Guardrail-aware routing
 

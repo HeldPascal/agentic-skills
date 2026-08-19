@@ -2,6 +2,20 @@
 
 All notable changes to the `orca-orchestrator` skill are documented here. This skill's `version` (in `SKILL.md` frontmatter) follows [Semantic Versioning](https://semver.org/): breaking changes to the state/config schema or the skill's behavioral contract bump the major version, additive changes bump the minor version, and clarifications/fixes bump the patch version.
 
+## 0.5.0
+
+Addresses external review feedback on 0.4.0 (state/observation semantics, aggregation granularity, and a spec-compliance issue).
+
+- **Breaking:** observations now require `kind: "execution"` (one worker's dispatch in one role; needs `task_id`/`role`/`harness`/`model`) or `kind: "task"` (a task's one-time overall outcome; needs `task_id`/`task_type`). Previously a single observation shape conflated per-dispatch and per-task fields, so a task with three differently-routed roles (Developer/Tester/Reviewer) had no well-defined way to be recorded, and task-level fields like `owner_interventions`/`review_verdict` risked being triple-counted across roles.
+- `scripts/state.py observe --task-id <task_id>` fills a `kind: "task"` observation's dispatch/rework/spec-revision/retry/blocking-timeout counters and termination reason from `tasks/<task_id>.json` instead of having them retyped, so the learned record can no longer drift from what `task.py` actually counted.
+- `aggregates.json` gained `role_combinations` (keyed `role|harness|model|backend|effort|model_variant`) and `tasks` (keyed by `task_type`, from `kind: "task"` observations only); `combinations`/`harnesses`/`models` are now built only from `kind: "execution"` observations. `registry.json` gained a matching `role_combinations` section. The combination key also gained `model_variant` (was tracked as a field but never grouped on).
+- **Breaking:** moved `version` out of `SKILL.md`'s top-level frontmatter into `metadata.version`, matching the [Agent Skills specification](https://github.com/agentskills/agentskills) (there is no top-level `version` field); verified with `skills-ref validate`.
+- `blocking_wait_minutes` is now snapshotted into task state at `task.py start` like the other limits, with new `task.py block-start`/`block-clear` commands and a `blocking_elapsed_minutes`/`limit_reached.blocking_wait_minutes` computed in `status`, instead of being an unenforced config value.
+- Replaced `discover.py`'s hardcoded per-harness effort-level enumeration (already stale) with a boolean `effort_configurable` signal; specific level names are a model/provider property that changes too fast for a baked-in list to track.
+- Softened `capabilities.json` documentation: a `false` cloud-auth signal means "unconfirmed", not "unavailable" — some harnesses authenticate via their own login flow rather than an environment variable.
+- Clarified that `role` (Developer/Tester/Reviewer/Planner) and `task_type` (planning/implementation/testing/review/troubleshooting/research/mixed) are independent axes, not meant to map one-to-one.
+- Added a GitHub Actions workflow running `pytest` and `skills-ref validate` on push/PR.
+
 ## 0.4.0
 
 - Split `registry.json` (revisable routing beliefs) from a new `capabilities.json` (mechanical snapshot written wholesale by `discover.py --write`); nothing wrote to `registry.json` automatically before, and the two had been conflated under "capability registry" language.

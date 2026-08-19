@@ -23,6 +23,7 @@ LIMIT_KEYS = (
     "max_spec_revisions",
     "max_dispatches",
     "max_elapsed_minutes",
+    "blocking_wait_minutes",
 )
 EVENT_COUNTERS = {
     "dispatch": "dispatches",
@@ -92,26 +93,39 @@ def start_task(task_id: str, limits_json: str | None) -> dict[str, Any]:
             "technical_retries": 0,
             "blocking_timeouts": 0,
         },
+        "blocking_started_at": None,
     }
     state_helper.write_json_atomic(path, value)
     return value
 
 
-def elapsed_minutes(value: dict[str, Any]) -> float:
-    started = state_helper.parse_timestamp(value.get("started_at"))
+def elapsed_minutes_since(started_at: Any, ended_at: Any = None) -> float:
+    started = state_helper.parse_timestamp(started_at)
     if started is None:
-        raise ValueError("task started_at must be a valid timestamp")
-    if value.get("finished_at") is None:
+        raise ValueError("timestamp must be a valid ISO 8601 string")
+    if ended_at is None:
         ended = datetime.now(timezone.utc)
     else:
-        ended = state_helper.parse_timestamp(value.get("finished_at"))
+        ended = state_helper.parse_timestamp(ended_at)
         if ended is None:
-            raise ValueError("task finished_at must be a valid timestamp")
+            raise ValueError("timestamp must be a valid ISO 8601 string")
     return (ended - started).total_seconds() / 60.0
+
+
+def elapsed_minutes(value: dict[str, Any]) -> float:
+    return elapsed_minutes_since(value.get("started_at"), value.get("finished_at"))
+
+
+def blocking_elapsed_minutes(value: dict[str, Any]) -> float | None:
+    started_at = value.get("blocking_started_at")
+    if started_at is None:
+        return None
+    return elapsed_minutes_since(started_at)
 
 
 def status_value(value: dict[str, Any]) -> dict[str, Any]:
     elapsed = elapsed_minutes(value)
+    blocking_elapsed = blocking_elapsed_minutes(value)
     limits = value["limits"]
     counters = value["counters"]
 
@@ -122,12 +136,16 @@ def status_value(value: dict[str, Any]) -> dict[str, Any]:
     return {
         **value,
         "elapsed_minutes": elapsed,
+        "blocking_elapsed_minutes": blocking_elapsed,
         "limit_reached": {
             "dispatches": reached("dispatches", "max_dispatches"),
             "rework_rounds": reached("rework_rounds", "max_rework_rounds"),
             "spec_revisions": reached("spec_revisions", "max_spec_revisions"),
             "elapsed_minutes": limits["max_elapsed_minutes"] is not None
             and elapsed >= limits["max_elapsed_minutes"],
+            "blocking_wait_minutes": blocking_elapsed is not None
+            and limits["blocking_wait_minutes"] is not None
+            and blocking_elapsed >= limits["blocking_wait_minutes"],
         },
     }
 
@@ -141,6 +159,32 @@ def record_event(task_id: str, event: str) -> dict[str, Any]:
     if value.get("status") == "finished":
         raise ValueError(f"task {task_id!r} is already finished")
     value["counters"][EVENT_COUNTERS[event]] += 1
+    if event == "blocking_timeout":
+        # Recording the timeout resolves this block instance (escalated,
+        # cancelled, or replaced per guardrails.md); clear the start marker
+        # so a later, unrelated block starts its own wait from zero.
+        value["blocking_started_at"] = None
+    state_helper.write_json_atomic(task_path(task_id), value)
+    return value
+
+
+def block_start(task_id: str) -> dict[str, Any]:
+    value = load_task(task_id)
+    if value.get("status") == "finished":
+        raise ValueError(f"task {task_id!r} is already finished")
+    if value.get("blocking_started_at") is None:
+        value["blocking_started_at"] = state_helper.utc_now()
+        state_helper.write_json_atomic(task_path(task_id), value)
+    return value
+
+
+def block_clear(task_id: str) -> dict[str, Any]:
+    """Clear the blocking-wait marker without counting a timeout — use when
+    the worker was unblocked before `blocking_wait_minutes` elapsed."""
+    value = load_task(task_id)
+    if value.get("status") == "finished":
+        raise ValueError(f"task {task_id!r} is already finished")
+    value["blocking_started_at"] = None
     state_helper.write_json_atomic(task_path(task_id), value)
     return value
 
@@ -169,6 +213,17 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="show task counters and limit status")
     status.add_argument("task_id")
 
+    block_start_parser = sub.add_parser(
+        "block-start", help="mark that the task is now blocked waiting for an answer"
+    )
+    block_start_parser.add_argument("task_id")
+
+    block_clear_parser = sub.add_parser(
+        "block-clear",
+        help="clear the blocking-wait marker without counting a timeout (unblocked in time)",
+    )
+    block_clear_parser.add_argument("task_id")
+
     finish = sub.add_parser("finish", help="finish task guardrail tracking")
     finish.add_argument("task_id")
     finish.add_argument("--termination-reason")
@@ -185,6 +240,10 @@ def main() -> int:
             print_status(record_event(args.task_id, args.event))
         elif args.command == "status":
             print_status(load_task(args.task_id))
+        elif args.command == "block-start":
+            print_status(block_start(args.task_id))
+        elif args.command == "block-clear":
+            print_status(block_clear(args.task_id))
         elif args.command == "finish":
             print_status(finish_task(args.task_id, args.termination_reason))
         else:

@@ -6,12 +6,14 @@ This reference defines the default orchestration lifecycle. Adapt it to reposito
 
 - **Project Owner**: defines intent and resolves genuine gates. Should not be required for routine implementation choices.
 - **Orchestrator**: decomposes work, routes workers, maintains counters/limits, records outcomes.
-- **Planner/Architect**: sharpens intent into an executable specification when needed.
+- **Planner/Architect**: sharpens intent into an executable specification when needed, before the pipeline roles below start.
 
-Below the Orchestrator, work is organized along two independent dimensions:
+Below the Orchestrator, the standard code-change pipeline is organized along two independent dimensions:
 
 - **Role** (what domain of work): **Developer**, **Tester**, **Reviewer**. Each role gets its own isolated context and works only from the frozen specification and the actual repository state, never from another role's intermediate reasoning.
 - **Level** (authority/cost, orthogonal to role): **Junior** performs bulk exploration, implementation, testing, and troubleshooting; **Senior** performs high-value judgment: difficult diagnosis, architecture correction, escalation, or takeover. Any role can be staffed by either level.
+
+`role` (Developer/Tester/Reviewer/Planner) and `task_type` ([routing.md](routing.md)'s `planning`/`implementation`/`testing`/`review`/`troubleshooting`/`research`/`mixed`) are different axes and are not meant to map one-to-one. `role` is *who is dispatched and in what capacity* — it is what execution/task observations record (see [state.md](state.md#observation-schema)) and is deliberately kept small and closed, because it drives context isolation and review independence, not classification. `task_type` is *what kind of work the task/dispatch is*, used for routing and aggregation, and stays open to whatever classification is useful. A Troubleshooter or Researcher dispatch outside the fixed Developer/Tester/Reviewer pipeline is a `task_type`, executed under whichever `role` fits the situation (often Developer) — it does not need its own role value.
 
 ```text
               Junior                         Senior
@@ -150,6 +152,6 @@ A workflow is complete when:
 - independent review is `APPROVE` or an explicitly justified equivalent verification condition applies,
 - takeover work, if any, received post-takeover verification,
 - the final repository state is understandable,
-- the outcome and any guardrail termination reason have been recorded for future routing via `scripts/state.py observe`, and the task has been closed via `scripts/task.py finish`.
+- each Developer/Tester/Reviewer/rework/takeover dispatch has a corresponding `kind: execution` observation, and the task's overall outcome and any guardrail termination reason have been recorded as exactly one `kind: task` observation (see [state.md](state.md#observation-schema)) via `scripts/state.py observe --task-id <task_id> '...'`, and the task has been closed via `scripts/task.py finish`.
 
-Do not report a task complete before both `state.py observe` and `task.py finish` have actually run; a described-but-unrecorded outcome leaves the registry unable to learn from the task.
+Do not report a task complete before both the `kind: task` observation and `task.py finish` have actually run; a described-but-unrecorded outcome leaves the registry unable to learn from the task, and an outcome recorded on the wrong observation kind (e.g. task-level fields on an execution observation) corrupts the aggregates instead of merely missing them.
