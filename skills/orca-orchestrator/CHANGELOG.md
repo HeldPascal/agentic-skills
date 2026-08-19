@@ -2,6 +2,15 @@
 
 All notable changes to the `orca-orchestrator` skill are documented here. This skill's `version` (in `SKILL.md` frontmatter) follows [Semantic Versioning](https://semver.org/): breaking changes to the state/config schema or the skill's behavioral contract bump the major version, additive changes bump the minor version, and clarifications/fixes bump the patch version.
 
+## 0.6.0
+
+0.5.0 documented the execution/task observation split but did not actually enforce it in code, so an agent could still put task-level fields on an execution observation, override task.py's counters by hand, record a task's outcome without `task.py` ever having run, or record it twice. `scripts/state.py` now enforces all of this mechanically:
+
+- **Breaking:** `execution` observations reject task-only fields (`owner_interventions`, `review_verdict`, `takeover`, and the six task-derived counter/termination fields); `task` observations reject execution-only fields (`role`, `level`, `harness`, `harness_version`, `model`, `model_variant`, `backend`, `host`, `effort`).
+- **Breaking:** `kind: "task"` now requires `--task-id`; `dispatches`/`rework_rounds`/`spec_revisions`/`technical_retries`/`blocking_timeouts`/`termination_reason` are always taken from `tasks/<task_id>.json` and rejected outright if supplied in the JSON body (previously `setdefault`, which let a caller-provided value silently win over the deterministic count).
+- **Breaking:** a `kind: "task"` observation is rejected unless the referenced task exists, is finished (`task.py finish` must run first), and doesn't already have a recorded task observation — a task's outcome can now only be recorded exactly once, in the correct order.
+- `task.py finish` now rejects finishing an already-finished task instead of silently overwriting `finished_at`/`termination_reason`.
+
 ## 0.5.0
 
 Addresses external review feedback on 0.4.0 (state/observation semantics, aggregation granularity, and a spec-compliance issue).

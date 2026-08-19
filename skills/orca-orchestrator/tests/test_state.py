@@ -36,6 +36,14 @@ def run_task(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def start_and_finish_task(tmp_path: Path, task_id: str, *, termination_reason: str | None = None) -> None:
+    assert run_task(tmp_path, "start", task_id).returncode == 0
+    finish_args = ["finish", task_id]
+    if termination_reason is not None:
+        finish_args += ["--termination-reason", termination_reason]
+    assert run_task(tmp_path, *finish_args).returncode == 0
+
+
 def test_init_creates_expected_files(tmp_path: Path) -> None:
     result = run_state(tmp_path, "init")
     assert result.returncode == 0, result.stderr
@@ -60,7 +68,9 @@ def test_init_creates_expected_files(tmp_path: Path) -> None:
     assert config_value["limits"]["max_spec_revisions"] == 1
     assert config_value["limits"]["max_dispatches"] == 8
     assert config_value["compaction"]["max_active_observations_per_combination"] == 50
-    assert json.loads(registry.read_text())["schema_version"] == 1
+    registry_value = json.loads(registry.read_text())
+    assert registry_value["schema_version"] == 1
+    assert registry_value["role_combinations"] == {}
     assert json.loads(capabilities.read_text())["schema_version"] == 1
     assert json.loads(aggregates.read_text())["schema_version"] == 1
 
@@ -94,9 +104,6 @@ def test_observe_execution_updates_combination_and_role_combination_aggregates(
             "model": "qwen/qwen3-coder-next",
             "backend": "lmstudio",
             "completed": True,
-            "owner_interventions": 0,
-            "review_verdict": "RETURN",
-            "rework_rounds": 1,
         }
     )
     result = run_state(tmp_path, "observe", observation)
@@ -116,8 +123,6 @@ def test_observe_execution_updates_combination_and_role_combination_aggregates(
     assert combo["observations"] == 1
     assert combo["completed"] == 1
     assert combo["completion_rate"] == 1.0
-    assert combo["review_verdicts"] == {"RETURN": 1}
-    assert combo["mean_rework_rounds"] == 1.0
 
     role_combo = aggregates["role_combinations"][
         "developer|pi|qwen/qwen3-coder-next|lmstudio|none|none"
@@ -144,21 +149,60 @@ def test_observe_execution_rejects_missing_required_fields(tmp_path: Path) -> No
     assert "model" in result.stderr
 
 
+def test_observe_execution_rejects_task_only_fields(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    observation = json.dumps(
+        {
+            "kind": "execution",
+            "task_id": "task-1",
+            "role": "developer",
+            "harness": "pi",
+            "model": "qwen/qwen3-coder-next",
+            "review_verdict": "RETURN",
+            "rework_rounds": 1,
+            "owner_interventions": 0,
+        }
+    )
+    result = run_state(tmp_path, "observe", observation)
+    assert result.returncode == 1
+    assert "execution' observations must not set task-only field(s)" in result.stderr
+    assert "review_verdict" in result.stderr
+    assert "rework_rounds" in result.stderr
+    assert "owner_interventions" in result.stderr
+
+
+def test_observe_task_rejects_execution_only_fields(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
+    observation = json.dumps(
+        {
+            "kind": "task",
+            "task_type": "implementation",
+            "harness": "pi",
+            "model": "qwen/qwen3-coder-next",
+        }
+    )
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 1
+    assert "task' observations must not set execution-only field(s)" in result.stderr
+    assert "harness" in result.stderr
+    assert "model" in result.stderr
+
+
 def test_observe_task_kind_updates_task_aggregate_not_combinations(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
 
     observation = json.dumps(
         {
             "kind": "task",
-            "task_id": "task-1",
             "task_type": "implementation",
             "completed": True,
             "owner_interventions": 1,
             "review_verdict": "APPROVE",
-            "rework_rounds": 2,
         }
     )
-    result = run_state(tmp_path, "observe", observation)
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
     assert result.returncode == 0, result.stderr
 
     aggregates = json.loads(
@@ -170,14 +214,63 @@ def test_observe_task_kind_updates_task_aggregate_not_combinations(tmp_path: Pat
     assert task_bucket["observations"] == 1
     assert task_bucket["completed"] == 1
     assert task_bucket["review_verdicts"] == {"APPROVE": 1}
-    assert task_bucket["mean_rework_rounds"] == 2.0
+    assert task_bucket["mean_rework_rounds"] == 0.0
+
+
+def test_observe_task_kind_requires_task_id_flag(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    result = run_state(
+        tmp_path, "observe", '{"kind":"task","task_id":"t1","task_type":"implementation"}'
+    )
+    assert result.returncode == 1
+    assert "require --task-id" in result.stderr
+
+
+def test_observe_task_kind_rejects_task_id_mismatch(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
+    observation = json.dumps(
+        {"kind": "task", "task_id": "other-task", "task_type": "implementation"}
+    )
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 1
+    assert "does not match --task-id" in result.stderr
 
 
 def test_observe_task_kind_requires_task_type(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
-    result = run_state(tmp_path, "observe", '{"kind":"task","task_id":"t1"}')
+    start_and_finish_task(tmp_path, "task-1")
+    result = run_state(tmp_path, "observe", '{"kind":"task"}', "--task-id", "task-1")
     assert result.returncode == 1
     assert "task_type" in result.stderr
+
+
+def test_observe_task_kind_requires_task_started(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    observation = json.dumps({"kind": "task", "task_type": "implementation"})
+    result = run_state(tmp_path, "observe", observation, "--task-id", "never-started")
+    assert result.returncode == 1
+    assert "not started" in result.stderr
+
+
+def test_observe_task_kind_requires_task_finished(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    assert run_task(tmp_path, "start", "task-1").returncode == 0
+    observation = json.dumps({"kind": "task", "task_type": "implementation"})
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 1
+    assert "is not finished" in result.stderr
+
+
+def test_observe_task_kind_rejects_duplicate_task_observation(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
+    observation = json.dumps({"kind": "task", "task_type": "implementation"})
+    assert run_state(tmp_path, "observe", observation, "--task-id", "task-1").returncode == 0
+
+    duplicate = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert duplicate.returncode == 1
+    assert "already has a recorded 'task' observation" in duplicate.stderr
 
 
 def test_observe_with_task_id_fills_counters_from_task_state(tmp_path: Path) -> None:
@@ -204,12 +297,40 @@ def test_observe_with_task_id_fills_counters_from_task_state(tmp_path: Path) -> 
     assert row["termination_reason"] == "rework_limit_reached"
 
 
+def test_observe_with_task_id_rejects_caller_supplied_derived_counters(tmp_path: Path) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
+
+    observation = json.dumps(
+        {"kind": "task", "task_type": "implementation", "rework_rounds": 999}
+    )
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 1
+    assert "must not set task-only field(s)" in result.stderr
+    assert "rework_rounds" in result.stderr
+
+
 def test_observe_with_task_id_fails_if_task_not_started(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
     observation = json.dumps({"kind": "task", "task_type": "implementation"})
     result = run_state(tmp_path, "observe", observation, "--task-id", "never-started")
     assert result.returncode == 1
     assert "not started" in result.stderr
+
+
+def test_execution_observation_with_task_id_stamps_task_id_without_requiring_task_file(
+    tmp_path: Path,
+) -> None:
+    assert run_state(tmp_path, "init").returncode == 0
+    observation = json.dumps(
+        {"kind": "execution", "role": "developer", "harness": "pi", "model": "qwen/qwen3-coder-next"}
+    )
+    result = run_state(tmp_path, "observe", observation, "--task-id", "task-1")
+    assert result.returncode == 0, result.stderr
+    row = json.loads(
+        (tmp_path / "state" / "orca-orchestrator" / "observations.jsonl").read_text().splitlines()[0]
+    )
+    assert row["task_id"] == "task-1"
 
 
 def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
@@ -267,6 +388,7 @@ def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
 
 def test_execution_and_task_observations_compact_in_separate_groups(tmp_path: Path) -> None:
     assert run_state(tmp_path, "init").returncode == 0
+    start_and_finish_task(tmp_path, "task-1")
 
     config = tmp_path / "config" / "orca-orchestrator" / "config.json"
     value = json.loads(config.read_text())
@@ -283,9 +405,9 @@ def test_execution_and_task_observations_compact_in_separate_groups(tmp_path: Pa
             "model": "qwen/qwen3-coder-next",
         }
     )
-    task = json.dumps({"kind": "task", "task_id": "task-1", "task_type": "implementation"})
+    task = json.dumps({"kind": "task", "task_type": "implementation"})
     assert run_state(tmp_path, "observe", execution).returncode == 0
-    assert run_state(tmp_path, "observe", task).returncode == 0
+    assert run_state(tmp_path, "observe", task, "--task-id", "task-1").returncode == 0
 
     active_path = tmp_path / "state" / "orca-orchestrator" / "observations.jsonl"
     active_kinds = {json.loads(line)["kind"] for line in active_path.read_text().splitlines()}

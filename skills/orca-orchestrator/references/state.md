@@ -126,7 +126,7 @@ Execution observation:
 }
 ```
 
-Task observation:
+Task observation, **as stored** after `--task-id` filled in the derived fields (the JSON body you actually submit to `observe --task-id task-2026-08-19-configurable-cost-backend '...'` omits `dispatches`/`rework_rounds`/`spec_revisions`/`technical_retries`/`blocking_timeouts`/`termination_reason` entirely — see [Required fields](#required-fields)):
 
 ```json
 {
@@ -155,7 +155,9 @@ Task observation:
 - `execution`: `task_id`, `role`, `harness`, `model`.
 - `task`: `task_id`, `task_type`.
 
-`task_id` links both kinds to the same task and to `tasks/<task_id>.json` (see [Task guardrail state](#task-guardrail-state)). Use `scripts/state.py observe --task-id <task_id> '...'` for a `task`-kind observation instead of retyping the counters by hand: it fills `dispatches`, `rework_rounds`, `spec_revisions`, `technical_retries`, `blocking_timeouts`, and `termination_reason` from the task's own deterministic guardrail state, so the learned record can never drift from what `task.py` actually counted. Explicit values already present in the JSON body take precedence over the filled-in ones. `--task-id` also works for `execution`-kind observations, where it only stamps `task_id` (no counters to fill).
+`task_id` links both kinds to the same task and to `tasks/<task_id>.json` (see [Task guardrail state](#task-guardrail-state)). A `task`-kind observation **requires** `--task-id <task_id>`; `scripts/state.py observe` rejects a bare `kind: "task"` observation without it, rejects it if the referenced task hasn't been started or hasn't been finished (`task.py finish` must run first), and rejects it if that task already has a recorded `task` observation (a task's outcome is recorded exactly once). `--task-id` fills `dispatches`, `rework_rounds`, `spec_revisions`, `technical_retries`, `blocking_timeouts`, and `termination_reason` from the task's own deterministic guardrail state — these six fields are **always** taken from `tasks/<task_id>.json`; supplying any of them explicitly in the JSON body is rejected outright rather than silently overridden, so the learned record cannot drift from what `task.py` actually counted. `--task-id` also works for `execution`-kind observations, where it only stamps `task_id` onto the observation (no task-derived counters apply to a single dispatch, and no started task is required).
+
+`execution` and `task` observations also reject each other's exclusive fields: an `execution` observation cannot carry `owner_interventions`/`review_verdict`/`takeover`/any of the six task-derived fields, and a `task` observation cannot carry `role`/`harness`/`model`/`backend`/`host`/`effort`/`model_variant`/`harness_version`/`level`. This is enforced by `scripts/state.py`, not just documented — see `TASK_ONLY_FIELDS`/`EXECUTION_ONLY_FIELDS` in `scripts/state.py`.
 
 `termination_reason` values are defined in [guardrails.md](guardrails.md#budget-exhaustion-record); reuse them verbatim here rather than inventing new spellings.
 
@@ -261,6 +263,7 @@ The state helper exposes the baseline operations:
 ```bash
 python scripts/state.py init
 python scripts/state.py observe '{"kind":"execution","task_id":"task-1","role":"developer","harness":"pi","model":"qwen/qwen3-coder-next"}'
+python scripts/task.py finish task-1   # required before a "task"-kind observation
 python scripts/state.py observe --task-id task-1 '{"kind":"task","task_type":"implementation","review_verdict":"APPROVE"}'
 python scripts/state.py show observations
 python scripts/state.py show aggregates

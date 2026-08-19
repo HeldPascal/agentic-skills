@@ -429,16 +429,50 @@ REQUIRED_FIELDS_BY_KIND = {
     "task": ("task_id", "task_type"),
 }
 
-# task.py counters that a "task"-kind observation should inherit from the
-# task's own deterministic guardrail state rather than have the LLM retype,
-# so the two never drift apart.
-TASK_COUNTER_FIELDS = (
+# task.py counters/termination_reason that a "task"-kind observation always
+# inherits from tasks/<task_id>.json — never from the caller — so the
+# learned record cannot drift from what task.py actually counted. Rejected
+# outright if present in the raw observation body.
+TASK_DERIVED_FIELDS = (
     "dispatches",
     "rework_rounds",
     "spec_revisions",
     "technical_retries",
     "blocking_timeouts",
+    "termination_reason",
 )
+
+# Fields that only make sense on a "task"-kind observation (the task's own
+# outcome), forbidden on "execution". Includes TASK_DERIVED_FIELDS plus
+# outcome fields task.py does not itself count.
+TASK_ONLY_FIELDS = frozenset(TASK_DERIVED_FIELDS) | {
+    "owner_interventions",
+    "review_verdict",
+    "takeover",
+}
+
+# Fields that only make sense on an "execution"-kind observation (what
+# actually ran), forbidden on "task" — a task may span several of these.
+EXECUTION_ONLY_FIELDS = frozenset(
+    {
+        "role",
+        "level",
+        "harness",
+        "harness_version",
+        "model",
+        "model_variant",
+        "backend",
+        "host",
+        "effort",
+    }
+)
+
+
+def has_task_observation(task_id: str) -> bool:
+    return any(
+        observation_kind(observation) == "task" and observation.get("task_id") == task_id
+        for observation in all_observations()
+    )
 
 
 def task_state_path(task_id: str) -> Path:
@@ -474,17 +508,61 @@ def append_observation(raw: str, *, task_id: str | None = None) -> None:
             + ", ".join(sorted(REQUIRED_FIELDS_BY_KIND))
         )
 
-    if task_id is not None:
-        value.setdefault("task_id", task_id)
+    forbidden = TASK_ONLY_FIELDS if kind == "execution" else EXECUTION_ONLY_FIELDS
+    present = sorted(field for field in forbidden if field in value)
+    if present:
+        other_kind = "task" if kind == "execution" else "execution"
+        raise ValueError(
+            f"'{kind}' observations must not set {other_kind}-only field(s): "
+            + ", ".join(present)
+        )
+
+    if kind == "task":
+        # TASK_DERIVED_FIELDS are always sourced from tasks/<task_id>.json,
+        # even on a "task" observation itself; a caller-supplied value here
+        # would silently win over the deterministic count, which defeats
+        # the point of deriving them. Reject rather than overwrite so a
+        # caller relying on its own value fails loudly instead of silently.
+        caller_supplied_derived = sorted(f for f in TASK_DERIVED_FIELDS if f in value)
+        if caller_supplied_derived:
+            raise ValueError(
+                "'task' observations must not set task-only field(s): "
+                + ", ".join(caller_supplied_derived)
+                + " (derived from task state; do not provide them explicitly)"
+            )
+        if task_id is None:
+            raise ValueError(
+                "'task' observations require --task-id; use 'state.py observe --task-id "
+                "<task_id> ...' so dispatch/rework/spec-revision/retry/blocking counters "
+                "and termination_reason come from tasks/<task_id>.json, not from the caller"
+            )
+        body_task_id = value.get("task_id")
+        if body_task_id is not None and body_task_id != task_id:
+            raise ValueError(
+                f"observation task_id {body_task_id!r} does not match --task-id {task_id!r}"
+            )
         task_state = load_task_state(task_id)
         if task_state is None:
             raise ValueError(f"task {task_id!r} not started; run 'task.py start' first")
-        if kind == "task":
-            counters = task_state["counters"]
-            for field in TASK_COUNTER_FIELDS:
-                value.setdefault(field, counters[field])
-            if task_state.get("termination_reason") is not None:
-                value.setdefault("termination_reason", task_state["termination_reason"])
+        if task_state.get("status") != "finished":
+            raise ValueError(
+                f"task {task_id!r} is not finished; run 'task.py finish' before recording "
+                "its outcome observation"
+            )
+        if has_task_observation(task_id):
+            raise ValueError(
+                f"task {task_id!r} already has a recorded 'task' observation; a task's "
+                "outcome is recorded exactly once"
+            )
+        value["task_id"] = task_id
+        counters = task_state["counters"]
+        for field in TASK_DERIVED_FIELDS:
+            if field == "termination_reason":
+                value[field] = task_state.get("termination_reason")
+            else:
+                value[field] = counters[field]
+    elif task_id is not None:
+        value.setdefault("task_id", task_id)
 
     required = REQUIRED_FIELDS_BY_KIND[kind]
     missing = [field for field in required if not value.get(field)]

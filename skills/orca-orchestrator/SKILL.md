@@ -2,7 +2,7 @@
 name: orca-orchestrator
 description: Orchestrate software-engineering work through Orca with spec-first planning, role-separated Junior/Senior execution, independent review, adaptive harness/model/locality routing, bounded autonomous recovery, and minimal project-owner intervention.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
 ---
 
 # Orca Orchestrator
@@ -68,7 +68,7 @@ Use the following loop unless the task clearly warrants a simpler path (see [wor
    - `TAKE_OVER`: Senior finishes the task when Junior iteration is no longer efficient/reliable; verify the resulting work independently before completion.
    - `SPEC_DEFECT`: repair the specification only when intent can be recovered without inventing requirements; otherwise create an Owner gate.
 8. After every `RETURN`, `SPEC_DEFECT`, technical retry, or takeover decision, use `scripts/task.py record` and `scripts/task.py status` to check configured limits before creating more work.
-9. Before declaring the task complete, run `scripts/task.py finish` and record exactly one `kind: task` observation for the task's overall outcome via `scripts/state.py observe --task-id <task_id> '{"kind":"task", ...}'` — `--task-id` fills the dispatch/rework/spec-revision counters and termination reason from `task.py`'s own state instead of having them retyped. Completion is not reached until both have been invoked.
+9. Before declaring the task complete, run `scripts/task.py finish` **first**, then record exactly one `kind: task` observation for the task's overall outcome via `scripts/state.py observe --task-id <task_id> '{"kind":"task", ...}'` — this order is required: `observe` rejects a `kind: task` observation for a task that isn't finished yet, and rejects a second one for a task that already has one. `--task-id` fills the dispatch/rework/spec-revision counters and termination reason from `task.py`'s own state; do not include those fields in the JSON body yourself, they are rejected if present. Completion is not reached until both have been invoked.
 10. Ask the Project Owner only when a genuine gate remains or bounded autonomous recovery is exhausted and Senior takeover cannot safely finish the task.
 
 ## Communication rules
@@ -122,7 +122,7 @@ Use the state helper scripts when available rather than manually rewriting struc
 - `scripts/task.py start` before the first dispatch of a task.
 - `scripts/task.py record` after every dispatch, rework round, spec revision, technical retry, or blocking timeout.
 - `scripts/state.py observe --task-id <task_id> '{"kind":"execution", ...}'` after each Developer/Tester/Reviewer/rework/takeover dispatch finishes.
-- `scripts/state.py observe --task-id <task_id> '{"kind":"task", ...}'` and `scripts/task.py finish` before the task is reported complete.
+- `scripts/task.py finish`, then `scripts/state.py observe --task-id <task_id> '{"kind":"task", ...}'`, in that order, before the task is reported complete.
 
 A task is not complete if these calls were skipped, even if the underlying work is done. If you reach the end of a task and cannot recall calling them, call `scripts/task.py status` to check, and record the missing `kind: task` observation before finishing.
 

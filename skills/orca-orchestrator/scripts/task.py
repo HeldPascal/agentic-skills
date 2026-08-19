@@ -191,6 +191,8 @@ def block_clear(task_id: str) -> dict[str, Any]:
 
 def finish_task(task_id: str, termination_reason: str | None) -> dict[str, Any]:
     value = load_task(task_id)
+    if value.get("status") == "finished":
+        raise ValueError(f"task {task_id!r} is already finished")
     value["status"] = "finished"
     value["finished_at"] = state_helper.utc_now()
     value["termination_reason"] = termination_reason

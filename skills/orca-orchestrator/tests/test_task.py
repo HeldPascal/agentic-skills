@@ -247,3 +247,19 @@ def test_finish_sets_completion_fields(tmp_path: Path) -> None:
     assert value["status"] == "finished"
     assert value["finished_at"].endswith("Z")
     assert value["termination_reason"] == "dispatch_limit_reached"
+
+
+def test_finish_rejects_already_finished_task(tmp_path: Path) -> None:
+    assert run_task(tmp_path, "start", "task").returncode == 0
+    first = run_task(tmp_path, "finish", "task", "--termination-reason", "dispatch_limit_reached")
+    assert first.returncode == 0, first.stderr
+    first_value = json.loads(first.stdout)
+
+    second = run_task(tmp_path, "finish", "task", "--termination-reason", "elapsed_time_limit_reached")
+    assert second.returncode == 1
+    assert "already finished" in second.stderr
+
+    # the first finish's result must not have been overwritten
+    unchanged = json.loads(task_file(tmp_path, "task").read_text())
+    assert unchanged["termination_reason"] == "dispatch_limit_reached"
+    assert unchanged["finished_at"] == first_value["finished_at"]
