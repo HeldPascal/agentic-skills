@@ -62,6 +62,10 @@ def registry_path() -> Path:
     return state_root() / "registry.json"
 
 
+def capabilities_path() -> Path:
+    return state_root() / "capabilities.json"
+
+
 def aggregates_path() -> Path:
     return state_root() / "aggregates.json"
 
@@ -141,6 +145,13 @@ def load_config() -> dict[str, Any]:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read an observations.jsonl-shaped file (used only for active/archived
+    observations). Rejects records without a valid `kind`, which includes
+    observations written before the 0.5.0 execution/task split: reading them
+    as-is would silently misclassify them as "execution" and mix pre-split,
+    potentially task-level fields into combination aggregates. Fail loudly
+    instead so the operator archives/migrates them deliberately.
+    """
     if not path.exists():
         return []
     values: list[dict[str, Any]] = []
@@ -152,6 +163,14 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             if not isinstance(value, dict):
                 raise ValueError(f"{path}:{line_number}: expected JSON object")
             ensure_supported_schema(value, f"{path}:{line_number}")
+            if value.get("kind") not in REQUIRED_FIELDS_BY_KIND:
+                raise ValueError(
+                    f"{path}:{line_number}: observation has no valid 'kind' "
+                    "(execution/task); this predates the 0.5.0 observation-kind split "
+                    "and cannot be read as-is. Move this file out of the active/archive "
+                    "path (or delete it) before continuing, or migrate its records to "
+                    "the current schema by hand."
+                )
             values.append(value)
     return values
 
@@ -167,6 +186,7 @@ def all_observations() -> list[dict[str, Any]]:
 def init_state() -> None:
     cfg = config_path()
     reg = registry_path()
+    caps = capabilities_path()
     agg = aggregates_path()
     obs = observations_path()
     archive = archive_root()
@@ -191,6 +211,7 @@ def init_state() -> None:
                 "harnesses": {},
                 "models": {},
                 "combinations": {},
+                "role_combinations": {},
             },
         )
     else:
@@ -198,6 +219,23 @@ def init_state() -> None:
         if not isinstance(value, dict):
             raise ValueError(f"{reg}: registry must be a JSON object")
         ensure_supported_schema(value, "registry")
+
+    if not caps.exists():
+        write_json_atomic(
+            caps,
+            {
+                "schema_version": SCHEMA_VERSION,
+                "updated_at": utc_now(),
+                "tools": {},
+                "backends": {},
+                "cloud": {},
+            },
+        )
+    else:
+        value = load_json(caps)
+        if not isinstance(value, dict):
+            raise ValueError(f"{caps}: capabilities must be a JSON object")
+        ensure_supported_schema(value, "capabilities")
 
     archive.mkdir(parents=True, exist_ok=True)
     obs.parent.mkdir(parents=True, exist_ok=True)
@@ -208,16 +246,55 @@ def init_state() -> None:
 
     print(f"config:       {cfg}")
     print(f"registry:     {reg}")
+    print(f"capabilities: {caps}")
     print(f"aggregates:   {agg}")
     print(f"observations: {obs}")
     print(f"archive:      {archive}")
+
+
+def write_capabilities(discovered: dict[str, Any]) -> None:
+    """Persist discover.py output as the mechanical capability snapshot.
+
+    Unlike registry.json (revisable beliefs derived from observations),
+    capabilities.json is fully overwritten on each write: it reflects what
+    was observed to be locally available just now, not accumulated history.
+    """
+    value = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now(),
+        "tools": discovered.get("tools", {}),
+        "backends": discovered.get("backends", {}),
+        "cloud": discovered.get("cloud", {}),
+    }
+    write_json_atomic(capabilities_path(), value)
 
 
 def combination_key(value: dict[str, Any]) -> str:
     harness = str(value.get("harness") or "unknown")
     model = str(value.get("model") or "unknown")
     backend = str(value.get("backend") or "unknown")
-    return f"{harness}|{model}|{backend}"
+    effort = str(value.get("effort") or "none")
+    variant = str(value.get("model_variant") or "none")
+    return f"{harness}|{model}|{backend}|{effort}|{variant}"
+
+
+def role_combination_key(value: dict[str, Any]) -> str:
+    role = str(value.get("role") or "unknown")
+    return f"{role}|{combination_key(value)}"
+
+
+def observation_kind(value: dict[str, Any]) -> str:
+    return str(value.get("kind") or "execution")
+
+
+def observation_group_key(value: dict[str, Any]) -> str:
+    """Group key used for compaction thresholds; mirrors the aggregation split
+    between execution observations (grouped by combination) and task
+    observations (grouped by task type), so unrelated kinds are never merged
+    into the same active/archive bucket."""
+    if observation_kind(value) == "task":
+        return f"task|{value.get('task_type') or 'unknown'}"
+    return combination_key(value)
 
 
 def new_bucket() -> dict[str, Any]:
@@ -301,19 +378,36 @@ def build_aggregates(
     *,
     stale_after_days: int,
 ) -> dict[str, Any]:
+    """Build deterministic aggregates from raw observations.
+
+    `harnesses`/`models`/`combinations`/`role_combinations` are derived only
+    from `kind: "execution"` observations, since only those carry a
+    well-defined harness/model/backend. `tasks` is derived only from
+    `kind: "task"` observations (one per task, holding task-level outcome
+    fields such as owner_interventions/review_verdict/rework_rounds), so a
+    task's final outcome is never double-counted across its per-role
+    execution observations. See references/state.md#observation-schema.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=stale_after_days)
 
     harnesses: dict[str, dict[str, Any]] = defaultdict(new_bucket)
     models: dict[str, dict[str, Any]] = defaultdict(new_bucket)
     combinations: dict[str, dict[str, Any]] = defaultdict(new_bucket)
+    role_combinations: dict[str, dict[str, Any]] = defaultdict(new_bucket)
+    tasks: dict[str, dict[str, Any]] = defaultdict(new_bucket)
 
     for observation in observations:
+        if observation_kind(observation) == "task":
+            task_type = str(observation.get("task_type") or "unknown")
+            update_bucket(tasks[task_type], observation, cutoff)
+            continue
+
         harness = str(observation.get("harness") or "unknown")
         model = str(observation.get("model") or "unknown")
-        combo = combination_key(observation)
         update_bucket(harnesses[harness], observation, cutoff)
         update_bucket(models[model], observation, cutoff)
-        update_bucket(combinations[combo], observation, cutoff)
+        update_bucket(combinations[combination_key(observation)], observation, cutoff)
+        update_bucket(role_combinations[role_combination_key(observation)], observation, cutoff)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -324,6 +418,10 @@ def build_aggregates(
         "combinations": {
             key: finalize_bucket(value) for key, value in sorted(combinations.items())
         },
+        "role_combinations": {
+            key: finalize_bucket(value) for key, value in sorted(role_combinations.items())
+        },
+        "tasks": {key: finalize_bucket(value) for key, value in sorted(tasks.items())},
     }
 
 
@@ -337,7 +435,79 @@ def write_aggregates() -> None:
     write_json_atomic(aggregates_path(), value)
 
 
-def append_observation(raw: str) -> None:
+# Required fields differ by kind: an "execution" observation describes one
+# role's dispatch (needs a harness/model to be a meaningful combination
+# data point) and a "task" observation describes the whole task's outcome
+# (no single harness/model applies). See references/state.md#observation-schema.
+REQUIRED_FIELDS_BY_KIND = {
+    "execution": ("task_id", "role", "harness", "model"),
+    "task": ("task_id", "task_type"),
+}
+
+# task.py counters/termination_reason that a "task"-kind observation always
+# inherits from tasks/<task_id>.json — never from the caller — so the
+# learned record cannot drift from what task.py actually counted. Rejected
+# outright if present in the raw observation body.
+TASK_DERIVED_FIELDS = (
+    "dispatches",
+    "rework_rounds",
+    "spec_revisions",
+    "technical_retries",
+    "blocking_timeouts",
+    "termination_reason",
+)
+
+# Fields that only make sense on a "task"-kind observation (the task's own
+# outcome), forbidden on "execution". Includes TASK_DERIVED_FIELDS plus
+# outcome fields task.py does not itself count.
+TASK_ONLY_FIELDS = frozenset(TASK_DERIVED_FIELDS) | {
+    "owner_interventions",
+    "review_verdict",
+    "takeover",
+}
+
+# Fields that only make sense on an "execution"-kind observation (what
+# actually ran), forbidden on "task" — a task may span several of these.
+EXECUTION_ONLY_FIELDS = frozenset(
+    {
+        "role",
+        "level",
+        "harness",
+        "harness_version",
+        "model",
+        "model_variant",
+        "backend",
+        "host",
+        "effort",
+    }
+)
+
+
+def has_task_observation(task_id: str) -> bool:
+    return any(
+        observation_kind(observation) == "task" and observation.get("task_id") == task_id
+        for observation in all_observations()
+    )
+
+
+def task_state_path(task_id: str) -> Path:
+    if not task_id or "/" in task_id or "\\" in task_id or ".." in task_id:
+        raise ValueError("task_id must not be empty or contain '/', '\\', or '..'")
+    return state_root() / "tasks" / f"{task_id}.json"
+
+
+def load_task_state(task_id: str) -> dict[str, Any] | None:
+    path = task_state_path(task_id)
+    if not path.exists():
+        return None
+    value = load_json(path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: task state must be a JSON object")
+    ensure_supported_schema(value, f"task {task_id!r}")
+    return value
+
+
+def append_observation(raw: str, *, task_id: str | None = None) -> None:
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("observation must be a JSON object")
@@ -346,7 +516,75 @@ def append_observation(raw: str) -> None:
     value.setdefault("timestamp", utc_now())
     ensure_supported_schema(value, "observation")
 
-    required = ("task_type", "harness", "model")
+    kind = value.get("kind")
+    if kind not in REQUIRED_FIELDS_BY_KIND:
+        raise ValueError(
+            "observation must set 'kind' to one of: "
+            + ", ".join(sorted(REQUIRED_FIELDS_BY_KIND))
+        )
+
+    forbidden = TASK_ONLY_FIELDS if kind == "execution" else EXECUTION_ONLY_FIELDS
+    present = sorted(field for field in forbidden if field in value)
+    if present:
+        other_kind = "task" if kind == "execution" else "execution"
+        raise ValueError(
+            f"'{kind}' observations must not set {other_kind}-only field(s): "
+            + ", ".join(present)
+        )
+
+    if kind == "task":
+        # TASK_DERIVED_FIELDS are always sourced from tasks/<task_id>.json,
+        # even on a "task" observation itself; a caller-supplied value here
+        # would silently win over the deterministic count, which defeats
+        # the point of deriving them. Reject rather than overwrite so a
+        # caller relying on its own value fails loudly instead of silently.
+        caller_supplied_derived = sorted(f for f in TASK_DERIVED_FIELDS if f in value)
+        if caller_supplied_derived:
+            raise ValueError(
+                "'task' observations must not set task-only field(s): "
+                + ", ".join(caller_supplied_derived)
+                + " (derived from task state; do not provide them explicitly)"
+            )
+        if task_id is None:
+            raise ValueError(
+                "'task' observations require --task-id; use 'state.py observe --task-id "
+                "<task_id> ...' so dispatch/rework/spec-revision/retry/blocking counters "
+                "and termination_reason come from tasks/<task_id>.json, not from the caller"
+            )
+        body_task_id = value.get("task_id")
+        if body_task_id is not None and body_task_id != task_id:
+            raise ValueError(
+                f"observation task_id {body_task_id!r} does not match --task-id {task_id!r}"
+            )
+        task_state = load_task_state(task_id)
+        if task_state is None:
+            raise ValueError(f"task {task_id!r} not started; run 'task.py start' first")
+        if task_state.get("status") != "finished":
+            raise ValueError(
+                f"task {task_id!r} is not finished; run 'task.py finish' before recording "
+                "its outcome observation"
+            )
+        if has_task_observation(task_id):
+            raise ValueError(
+                f"task {task_id!r} already has a recorded 'task' observation; a task's "
+                "outcome is recorded exactly once"
+            )
+        value["task_id"] = task_id
+        counters = task_state["counters"]
+        for field in TASK_DERIVED_FIELDS:
+            if field == "termination_reason":
+                value[field] = task_state.get("termination_reason")
+            else:
+                value[field] = counters[field]
+    elif task_id is not None:
+        body_task_id = value.get("task_id")
+        if body_task_id is not None and body_task_id != task_id:
+            raise ValueError(
+                f"observation task_id {body_task_id!r} does not match --task-id {task_id!r}"
+            )
+        value["task_id"] = task_id
+
+    required = REQUIRED_FIELDS_BY_KIND[kind]
     missing = [field for field in required if not value.get(field)]
     if missing:
         raise ValueError(f"observation missing required field(s): {', '.join(missing)}")
@@ -374,7 +612,7 @@ def maybe_compact() -> None:
     active = read_jsonl(observations_path())
     counts: dict[str, int] = defaultdict(int)
     for observation in active:
-        counts[combination_key(observation)] += 1
+        counts[observation_group_key(observation)] += 1
     if any(count > max_active for count in counts.values()):
         compact_state(quiet=True)
 
@@ -412,7 +650,7 @@ def compact_state(*, quiet: bool = False) -> None:
     active = read_jsonl(observations_path())
     grouped: dict[str, list[int]] = defaultdict(list)
     for index, observation in enumerate(active):
-        grouped[combination_key(observation)].append(index)
+        grouped[observation_group_key(observation)].append(index)
 
     selected: set[int] = set()
     for indices in grouped.values():
@@ -472,6 +710,17 @@ def show(kind: str) -> None:
         print(json.dumps(value, indent=2, sort_keys=True))
         return
 
+    if kind == "capabilities":
+        path = capabilities_path()
+        if not path.exists():
+            raise FileNotFoundError(f"missing {path}; run init first")
+        value = load_json(path)
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: capabilities must be a JSON object")
+        ensure_supported_schema(value, "capabilities")
+        print(json.dumps(value, indent=2, sort_keys=True))
+        return
+
     path = observations_path()
     if not path.exists():
         raise FileNotFoundError(f"missing {path}; run init first")
@@ -489,10 +738,19 @@ def build_parser() -> argparse.ArgumentParser:
         "json",
         help="observation as a JSON object; schema_version/timestamp are added if omitted",
     )
+    observe.add_argument(
+        "--task-id",
+        help=(
+            "stamp task_id onto the observation and, for kind:task, fill "
+            "dispatch/rework/spec-revision/retry/blocking counters and "
+            "termination_reason from tasks/<task_id>.json instead of "
+            "retyping them (explicit values in the JSON body still win)"
+        ),
+    )
 
     show_parser = sub.add_parser("show", help="show current state")
     show_parser.add_argument(
-        "kind", choices=("config", "registry", "aggregates", "observations")
+        "kind", choices=("config", "registry", "capabilities", "aggregates", "observations")
     )
 
     sub.add_parser(
@@ -513,7 +771,7 @@ def main() -> int:
         if args.command == "init":
             init_state()
         elif args.command == "observe":
-            append_observation(args.json)
+            append_observation(args.json, task_id=args.task_id)
         elif args.command == "show":
             show(args.kind)
         elif args.command == "aggregate":

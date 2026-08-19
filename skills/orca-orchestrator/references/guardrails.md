@@ -22,7 +22,11 @@ Limits are task-level policy, not suggestions. Do not silently exceed them.
 
 ## Rework termination
 
-A `RETURN` normally creates semantic rework for the Junior. Count each reviewed rework attempt as one rework round.
+A `RETURN` normally creates semantic rework for the Junior. Count each reviewed rework attempt as one rework round, regardless of which role (Developer or Tester) receives it.
+
+An intra-role Senior correction of a Junior's output (see [workflow.md](workflow.md#junior-and-senior-coordination-within-a-role)) also counts as a rework round: it consumes the same bounded budget even though it never leaves the role.
+
+Use `scripts/task.py record --event rework` to persist each round and `scripts/task.py status` to check the snapshotted limit deterministically.
 
 When `max_rework_rounds` is reached:
 
@@ -72,13 +76,17 @@ Create an Owner gate when repairing the specification would require choosing or 
 
 Count autonomous specification repairs. After `max_spec_revisions` is reached, another material specification defect requires an Owner gate unless the new defect is purely clerical and does not alter intent.
 
+Use `scripts/task.py record --event spec_revision` to persist material revisions and `scripts/task.py status` to check the limit.
+
 Do not use `SPEC_DEFECT` to move requirements merely because implementation is difficult.
 
 ## Dispatch and task budgets
 
 Track task-level resource use when possible.
 
-At minimum count dispatches created for the task, including implementation, review, rework, takeover, and technical retry dispatches. When `max_dispatches` is reached, stop creating new dispatches and choose one of:
+`scripts/task.py record` persists dispatch and related counters, and `scripts/task.py status` computes counter and elapsed-time limit status instead of relying on LLM self-tracking.
+
+At minimum count dispatches created for the task, including Developer, Tester, Reviewer, rework, takeover, and technical retry dispatches, regardless of role. `max_dispatches` is a single task-level budget shared across roles, not a separate budget per role. When `max_dispatches` is reached, stop creating new dispatches and choose one of:
 
 - complete using an already-running worker if no new dispatch is required,
 - Senior takeover within an existing eligible context,
@@ -92,11 +100,16 @@ Future versions may add token or monetary budgets when those metrics are reliabl
 
 When a worker is blocked waiting for an answer, do not wait indefinitely.
 
-After `blocking_wait_minutes`:
+`blocking_wait_minutes` is snapshotted into the task at `task.py start` like the other limits, so it cannot silently change mid-task if config is edited later. Call `scripts/task.py block-start <task_id>` when a block begins and `scripts/task.py status <task_id>` to check `blocking_elapsed_minutes`/`limit_reached.blocking_wait_minutes` deterministically, instead of estimating elapsed wait time yourself.
+
+After `blocking_wait_minutes` (`limit_reached.blocking_wait_minutes` is `true`):
 
 - route technical or repository-resolvable questions to a Senior or Orchestrator capable of answering them,
 - route owner-intent or consequential scope questions to an Owner gate,
-- cancel or replace stale blocked work when the answer is no longer useful.
+- cancel or replace stale blocked work when the answer is no longer useful,
+- record the resolution with `scripts/task.py record --event blocking_timeout`, which also clears the blocking-wait marker.
+
+If the worker is unblocked before the limit is reached, call `scripts/task.py block-clear <task_id>` instead — this does not count as a timeout and does not increment `blocking_timeouts`.
 
 A timeout is an escalation trigger, not permission to invent missing intent.
 
