@@ -86,18 +86,22 @@ The limits are task-level policy. A `null` elapsed-time limit means that no gene
 
 Observations are immutable records. Fields may be omitted when unknown.
 
+`role` distinguishes `developer`/`tester`/`reviewer` work (see [workflow.md](workflow.md#roles)) and is independent of `task_type`. `host` is `local` or `cloud`. `effort` records the requested reasoning/thinking-effort level for cloud harnesses that expose one (e.g. `low`/`medium`/`high`); leave it `null` for harnesses/backends without a configurable effort dimension. `effort` is a routing dimension analogous to `model_variant` for local quantization: the same model/harness at a different effort level is effectively a different combination and should be tracked separately when the harness/backend support varying it.
+
 ```json
 {
   "schema_version": 1,
   "timestamp": "2026-08-19T08:00:00Z",
   "task_type": "implementation",
   "task_summary": "Implement configurable cost backend",
+  "role": "developer",
   "harness": "pi",
   "harness_version": "0.84.2",
   "model": "qwen/qwen3-coder-next",
   "model_variant": "4bit",
   "backend": "lmstudio",
   "host": "local",
+  "effort": null,
   "completed": true,
   "owner_interventions": 0,
   "review_verdict": "RETURN",
@@ -130,7 +134,9 @@ Do not fabricate missing metrics. Unknown is preferable to false precision.
 
 - harness,
 - model,
-- harness/model/backend combination.
+- harness/model/backend/effort combination (key format `harness|model|backend|effort`, using `unknown`/`none` placeholders for missing fields).
+
+The combination key includes `effort` because the same harness/model/backend at a different cloud effort level is treated as a distinct combination for routing purposes (see [routing.md](routing.md#locality-and-effort)).
 
 Useful metrics include:
 
@@ -179,7 +185,7 @@ The active `observations.jsonl` should remain small enough to load recent releva
 
 Compaction is deterministic and script-driven:
 
-1. Group active observations by harness/model/backend combination.
+1. Group active observations by harness/model/backend/effort combination.
 2. When a group exceeds `max_active_observations_per_combination`, select the oldest observations in that group.
 3. Archive at least `archive_batch_size_per_combination` observations (or enough to return under the active threshold, whichever is larger).
 4. Write selected observations to `archive/observations-*.jsonl`.

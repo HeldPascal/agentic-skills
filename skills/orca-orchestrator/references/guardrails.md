@@ -22,7 +22,9 @@ Limits are task-level policy, not suggestions. Do not silently exceed them.
 
 ## Rework termination
 
-A `RETURN` normally creates semantic rework for the Junior. Count each reviewed rework attempt as one rework round.
+A `RETURN` normally creates semantic rework for the Junior. Count each reviewed rework attempt as one rework round, regardless of which role (Developer or Tester) receives it.
+
+An intra-role Senior correction of a Junior's output (see [workflow.md](workflow.md#junior-and-senior-coordination-within-a-role)) also counts as a rework round: it consumes the same bounded budget even though it never leaves the role.
 
 Use `scripts/task.py record --event rework` to persist each round and `scripts/task.py status` to check the snapshotted limit deterministically.
 
@@ -84,7 +86,7 @@ Track task-level resource use when possible.
 
 `scripts/task.py record` persists dispatch and related counters, and `scripts/task.py status` computes counter and elapsed-time limit status instead of relying on LLM self-tracking.
 
-At minimum count dispatches created for the task, including implementation, review, rework, takeover, and technical retry dispatches. When `max_dispatches` is reached, stop creating new dispatches and choose one of:
+At minimum count dispatches created for the task, including Developer, Tester, Reviewer, rework, takeover, and technical retry dispatches, regardless of role. `max_dispatches` is a single task-level budget shared across roles, not a separate budget per role. When `max_dispatches` is reached, stop creating new dispatches and choose one of:
 
 - complete using an already-running worker if no new dispatch is required,
 - Senior takeover within an existing eligible context,

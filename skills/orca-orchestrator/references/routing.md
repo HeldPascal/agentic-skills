@@ -1,22 +1,37 @@
 # Adaptive Routing
 
-Routing chooses a harness/model/backend combination for a concrete execution step. Treat routing knowledge as empirical and revisable.
+Routing chooses a role, level, harness/model/backend combination, locality, and (for cloud) effort level for a concrete execution step. Treat routing knowledge as empirical and revisable.
 
 ## Inputs
 
 Consider only dimensions that materially affect the task:
 
 - task type: planning, implementation, testing, review, troubleshooting, research, mixed,
+- role: Developer, Tester, or Reviewer (see [workflow.md](workflow.md#roles)),
 - complexity/risk,
 - expected repository exploration/context size,
 - tool-use requirements,
 - vision requirement,
 - latency/cost constraints,
-- current availability of harnesses/models/backends,
+- locality (local vs. cloud) and, for cloud, effort/reasoning-budget level,
+- current availability of harnesses/models/backends (see [Discovery](#discovery)),
 - current task guardrail state,
 - relevant prior observations and deterministic aggregates.
 
 Avoid overly detailed classifications when evidence is sparse.
+
+## Discovery
+
+`scripts/discover.py` reports what can actually be observed locally: installed harness CLIs and their versions, models currently served by a local LM Studio backend, and — for harnesses with a known cloud mode — a heuristic cloud-auth signal (presence of common API-key environment variables) plus a static table of known effort/reasoning levels.
+
+It deliberately does **not** enumerate which cloud models an account/key can reach, and cannot discover effort levels dynamically: cloud providers do not expose a generic "list models and effort levels for this key" endpoint, and effort is a request-time parameter rather than a queryable model property. Keep `KNOWN_EFFORT_LEVELS` in `discover.py` in sync with current provider documentation instead of trying to probe it.
+
+Run discovery:
+
+- at orchestration start when the registry is stale or missing entries for harnesses/backends the task may need,
+- again mid-task only if a specific capability (a backend, a cloud harness, an effort level) turns out to be required and its availability was not already confirmed.
+
+Do not re-run discovery on a fixed schedule inside a single task; it does not change fast enough within one task's lifetime to justify that.
 
 ## Evidence hierarchy
 
@@ -60,6 +75,15 @@ Harness and model performance may interact. Preserve combination-level evidence 
 `harness_quality + model_quality = combination_quality`
 
 Record backend and relevant model variant as well when they can materially affect behavior.
+
+## Locality and effort
+
+Local and cloud execution are a routing dimension, not a proxy for Junior/Senior. A local model can be the right Senior reviewer for a low-risk, well-understood change if evidence supports it; a cheap, low-effort cloud call can be the right Junior implementer. Do not hard-code "Junior = local, Senior = cloud" — route on evidence and task fit instead, using locality/cost/latency/privacy as explicit inputs:
+
+- **Local**: no per-token cost, no network dependency, but bounded by locally available model quality/context and hardware throughput. Prefer for high-volume, well-specified Junior work when local quality evidence is adequate.
+- **Cloud**: typically stronger frontier models and configurable effort/reasoning budget, at per-call cost and latency, and with data leaving the local environment. Prefer for tasks needing capability beyond what local models demonstrate, or where effort can be tuned to the risk of the step (e.g. higher effort for Review/TAKE_OVER than for routine Junior implementation).
+
+Treat effort level like `model_variant`: the combination key includes it (see [state.md](state.md#deterministic-aggregates)), so evidence at one effort level does not automatically transfer to another. When evidence for a given effort level is sparse, prefer the evidence hierarchy's fallback tiers (harness/model-level aggregates, then exploratory choice) over guessing an effort level with no supporting evidence.
 
 ## Confidence and recency
 

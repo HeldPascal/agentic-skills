@@ -90,7 +90,7 @@ def test_observe_appends_observation_and_updates_aggregates(tmp_path: Path) -> N
     aggregates = json.loads(
         (tmp_path / "state" / "orca-orchestrator" / "aggregates.json").read_text()
     )
-    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio"]
+    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio|none"]
     assert combo["observations"] == 1
     assert combo["completed"] == 1
     assert combo["completion_rate"] == 1.0
@@ -150,7 +150,7 @@ def test_observe_compacts_oldest_combination_evidence_without_losing_aggregates(
     aggregates = json.loads(
         (tmp_path / "state" / "orca-orchestrator" / "aggregates.json").read_text()
     )
-    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio"]
+    combo = aggregates["combinations"]["pi|qwen/qwen3-coder-next|lmstudio|none"]
     assert combo["observations"] == 3
     assert combo["completed"] == 2
 

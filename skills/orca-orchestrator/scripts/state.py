@@ -217,7 +217,8 @@ def combination_key(value: dict[str, Any]) -> str:
     harness = str(value.get("harness") or "unknown")
     model = str(value.get("model") or "unknown")
     backend = str(value.get("backend") or "unknown")
-    return f"{harness}|{model}|{backend}"
+    effort = str(value.get("effort") or "none")
+    return f"{harness}|{model}|{backend}|{effort}"
 
 
 def new_bucket() -> dict[str, Any]:

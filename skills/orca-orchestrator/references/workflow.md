@@ -7,10 +7,38 @@ This reference defines the default orchestration lifecycle. Adapt it to reposito
 - **Project Owner**: defines intent and resolves genuine gates. Should not be required for routine implementation choices.
 - **Orchestrator**: decomposes work, routes workers, maintains counters/limits, records outcomes.
 - **Planner/Architect**: sharpens intent into an executable specification when needed.
-- **Junior**: performs bulk exploration, implementation, testing, and troubleshooting.
-- **Senior**: performs high-value judgment: review, difficult diagnosis, architecture correction, escalation, or takeover.
 
-Junior/Senior is an authority/cost dimension, not a separate domain taxonomy. A Developer, Test-Developer, Planner, or Troubleshooter can be executed by either level when appropriate.
+Below the Orchestrator, work is organized along two independent dimensions:
+
+- **Role** (what domain of work): **Developer**, **Tester**, **Reviewer**. Each role gets its own isolated context and works only from the frozen specification and the actual repository state, never from another role's intermediate reasoning.
+- **Level** (authority/cost, orthogonal to role): **Junior** performs bulk exploration, implementation, testing, and troubleshooting; **Senior** performs high-value judgment: difficult diagnosis, architecture correction, escalation, or takeover. Any role can be staffed by either level.
+
+```text
+              Junior                         Senior
+Developer     bulk implementation            architecture-sensitive
+              against the frozen spec        implementation, takeover
+Tester        derives checks from the        diagnoses hard-to-reproduce
+              frozen spec, independent        failures, judges test adequacy
+              of the implementation
+Reviewer      —                              independent APPROVE / RETURN /
+                                              TAKE_OVER / SPEC_DEFECT verdict
+```
+
+Reviewer is Senior by default (see [Reviewer selection](#reviewer-selection)); a Junior Reviewer pass is only a supplementary check, never the independent review of record.
+
+### Role isolation
+
+- Developer and Tester are dispatched into separate contexts from the same frozen specification. Neither receives the other's intermediate reasoning, diffs-in-progress, or self-justification before convergence.
+- They converge at integration: the Tester's checks run against the Developer's actual implementation, and both are inspected together during Review.
+- This isolation is what prevents test blindness: a Tester who has seen the implementation's reasoning tends to test what was built rather than what was specified.
+
+### Junior and Senior coordination within a role
+
+When a Senior corrects or extends a Junior's output *within the same role* (e.g. a Senior Developer fixing a Junior Developer's partial implementation, or a Senior Tester strengthening a Junior Tester's checks), treat that as an **intra-role review round**: it uses the same rework accounting as a cross-role `RETURN` (see [guardrails.md](guardrails.md)), but does not by itself satisfy the independent cross-role review requirement below.
+
+### Final cross-role review
+
+A dedicated **Reviewer** pass, independent of both Developer and Tester, remains required before `APPROVE` even when Developer/Senior and Tester/Senior already coordinated internally. Intra-role coordination improves the candidate; it is not a substitute for independent review.
 
 ## Spec-first flow
 
@@ -29,9 +57,11 @@ Track material specification revisions. A clerical wording fix that does not alt
 
 ## Independent implementation and verification
 
-For changes where test blindness matters, implementation and independent test derivation should share the specification, not each other's intermediate reasoning. They may later converge through integration and review.
+Developer and Tester share the specification, not each other's intermediate reasoning (see [Role isolation](#role-isolation)). They converge through integration and review.
 
-Separate worktrees or equivalent isolated contexts are preferred for conflicting parallel changes.
+Separate worktrees or equivalent isolated contexts are preferred for conflicting parallel changes, and are required between Developer and Tester whenever test blindness matters.
+
+For small, low-risk tasks where a separate Tester dispatch would be pure overhead, the Orchestrator may collapse Developer and Tester into one dispatch; state this simplification explicitly rather than silently skipping test independence, and still route Review as a separate role.
 
 A completion report is evidence about what a worker claims to have done, not proof that checks passed. Inspect actual repository state and test/check results before review.
 
@@ -129,4 +159,6 @@ A workflow is complete when:
 - independent review is `APPROVE` or an explicitly justified equivalent verification condition applies,
 - takeover work, if any, received post-takeover verification,
 - the final repository state is understandable,
-- the outcome and any guardrail termination reason have been recorded for future routing.
+- the outcome and any guardrail termination reason have been recorded for future routing via `scripts/state.py observe`, and the task has been closed via `scripts/task.py finish`.
+
+Do not report a task complete before both `state.py observe` and `task.py finish` have actually run; a described-but-unrecorded outcome leaves the registry unable to learn from the task.
