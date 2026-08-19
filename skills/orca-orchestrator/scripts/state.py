@@ -62,6 +62,10 @@ def registry_path() -> Path:
     return state_root() / "registry.json"
 
 
+def capabilities_path() -> Path:
+    return state_root() / "capabilities.json"
+
+
 def aggregates_path() -> Path:
     return state_root() / "aggregates.json"
 
@@ -167,6 +171,7 @@ def all_observations() -> list[dict[str, Any]]:
 def init_state() -> None:
     cfg = config_path()
     reg = registry_path()
+    caps = capabilities_path()
     agg = aggregates_path()
     obs = observations_path()
     archive = archive_root()
@@ -199,6 +204,23 @@ def init_state() -> None:
             raise ValueError(f"{reg}: registry must be a JSON object")
         ensure_supported_schema(value, "registry")
 
+    if not caps.exists():
+        write_json_atomic(
+            caps,
+            {
+                "schema_version": SCHEMA_VERSION,
+                "updated_at": utc_now(),
+                "tools": {},
+                "backends": {},
+                "cloud": {},
+            },
+        )
+    else:
+        value = load_json(caps)
+        if not isinstance(value, dict):
+            raise ValueError(f"{caps}: capabilities must be a JSON object")
+        ensure_supported_schema(value, "capabilities")
+
     archive.mkdir(parents=True, exist_ok=True)
     obs.parent.mkdir(parents=True, exist_ok=True)
     obs.touch(exist_ok=True)
@@ -208,9 +230,27 @@ def init_state() -> None:
 
     print(f"config:       {cfg}")
     print(f"registry:     {reg}")
+    print(f"capabilities: {caps}")
     print(f"aggregates:   {agg}")
     print(f"observations: {obs}")
     print(f"archive:      {archive}")
+
+
+def write_capabilities(discovered: dict[str, Any]) -> None:
+    """Persist discover.py output as the mechanical capability snapshot.
+
+    Unlike registry.json (revisable beliefs derived from observations),
+    capabilities.json is fully overwritten on each write: it reflects what
+    was observed to be locally available just now, not accumulated history.
+    """
+    value = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now(),
+        "tools": discovered.get("tools", {}),
+        "backends": discovered.get("backends", {}),
+        "cloud": discovered.get("cloud", {}),
+    }
+    write_json_atomic(capabilities_path(), value)
 
 
 def combination_key(value: dict[str, Any]) -> str:
@@ -473,6 +513,17 @@ def show(kind: str) -> None:
         print(json.dumps(value, indent=2, sort_keys=True))
         return
 
+    if kind == "capabilities":
+        path = capabilities_path()
+        if not path.exists():
+            raise FileNotFoundError(f"missing {path}; run init first")
+        value = load_json(path)
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: capabilities must be a JSON object")
+        ensure_supported_schema(value, "capabilities")
+        print(json.dumps(value, indent=2, sort_keys=True))
+        return
+
     path = observations_path()
     if not path.exists():
         raise FileNotFoundError(f"missing {path}; run init first")
@@ -493,7 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_parser = sub.add_parser("show", help="show current state")
     show_parser.add_argument(
-        "kind", choices=("config", "registry", "aggregates", "observations")
+        "kind", choices=("config", "registry", "capabilities", "aggregates", "observations")
     )
 
     sub.add_parser(

@@ -81,12 +81,7 @@ Count reviewed rework attempts. When the configured rework limit is reached, do 
 
 Use when another Junior cycle is unlikely to be efficient or reliable, for example after repeated non-progress, systematic tool failure, exhausted rework budget, or a change whose remaining work requires Senior judgment.
 
-A takeover implementation is not self-approving. After the Senior changes the repository:
-
-1. execute the relevant verification/checks,
-2. compare the resulting state against the frozen specification,
-3. obtain a fresh independent review when practical,
-4. for high-risk work, require sufficiently independent verification before completion.
+A takeover implementation is not self-approving. Follow [guardrails.md](guardrails.md#take_over-closure) for the required post-takeover verification steps.
 
 ### SPEC_DEFECT
 
@@ -98,11 +93,7 @@ Count material spec revisions and respect the configured limit. Do not use `SPEC
 
 ## Reviewer selection
 
-Prefer a reviewer with a different model and a fresh execution context.
-
-If another practical model is unavailable, use the same model only in a fresh isolated review context that receives the frozen specification and repository state but not the implementer's reasoning or self-justification.
-
-For high-risk work where sufficient independence cannot be established, require another verification mechanism or an Owner gate. Never accept the implementer's own completion report as review.
+Reviewer is a distinct role from Developer and Tester (see [Roles](#roles)); follow the fallback order in [guardrails.md](guardrails.md#reviewer-independence-fallback) when choosing who reviews. Never accept the implementer's own completion report as review.
 
 ## Retry versus rework
 

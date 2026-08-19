@@ -14,12 +14,18 @@ capability metadata to keep in sync with provider docs, not a live probe.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import state as state_helper  # noqa: E402
 
 TOOLS = {
     "orca": ["orca", "--version"],
@@ -113,9 +119,9 @@ def cloud_auth_signal(name: str) -> dict[str, object]:
     }
 
 
-def main() -> int:
+def discover() -> dict[str, object]:
     tools = {name: command_version(command) for name, command in TOOLS.items()}
-    result = {
+    return {
         "tools": tools,
         "backends": {"lmstudio": lmstudio_models()},
         "cloud": {
@@ -127,7 +133,28 @@ def main() -> int:
             if tools.get(name, {}).get("available")
         },
     }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help=(
+            "also persist the result to capabilities.json (state root); "
+            "overwrites the prior snapshot rather than merging it"
+        ),
+    )
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    result = discover()
     print(json.dumps(result, indent=2, sort_keys=True))
+    if args.write:
+        state_helper.write_capabilities(result)
+        print(f"wrote {state_helper.capabilities_path()}", file=sys.stderr)
     return 0
 
 

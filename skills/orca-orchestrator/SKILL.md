@@ -1,6 +1,6 @@
 ---
 name: orca-orchestrator
-version: 0.3.0
+version: 0.4.0
 description: Orchestrate software-engineering work through Orca with spec-first planning, role-separated Junior/Senior execution, independent review, adaptive harness/model/locality routing, bounded autonomous recovery, and minimal project-owner intervention.
 ---
 
@@ -38,8 +38,8 @@ Do not assume the XDG environment variables are set.
 
 1. Inspect repository guidance (`AGENTS.md`, project docs, roadmap/specification files).
 2. Read user configuration if present, including orchestration limits.
-3. Read the current capability registry, deterministic aggregates, and recent relevant observations if present.
-4. Run `scripts/discover.py` if the registry is stale or incomplete, or if the task may need a harness/backend/effort level not yet confirmed available. It reports local tool/backend availability and known cloud-harness auth signals; it does not enumerate cloud models or effort levels (see [routing.md](references/routing.md#discovery)).
+3. Read `capabilities.json` (what is available), `registry.json` (what is believed to perform well), deterministic aggregates, and recent relevant observations if present. These are distinct files with distinct write paths — see [state.md](references/state.md#paths).
+4. Run `scripts/discover.py --write` if `capabilities.json` is stale or incomplete, or if the task may need a harness/backend/effort level not yet confirmed available. It reports local tool/backend availability and known cloud-harness auth signals; it does not enumerate cloud models or effort levels (see [routing.md](references/routing.md#discovery)).
 5. Classify the task sufficiently for routing; avoid elaborate taxonomy when a simple classification is enough.
 6. Create a frozen task specification for Developer, Tester, and Reviewer work (see [workflow.md](references/workflow.md#roles)).
 7. Run `scripts/task.py start` before any dispatch, to snapshot task counters for dispatches, rework rounds, spec revisions, and elapsed time. Do not dispatch before this has run.
@@ -80,13 +80,7 @@ Use the following loop unless the task clearly warrants a simpler path (see [wor
 
 ## Review independence
 
-Prefer, in order:
-
-1. different model + fresh review context,
-2. same model + fresh isolated review context without the implementer's reasoning/self-justification,
-3. for high-risk work, an additional independent verification step or Owner gate when sufficient independence cannot otherwise be established.
-
-Never treat an implementer's completion report or self-review as independent approval.
+Follow the reviewer independence fallback order and takeover-closure verification defined in [guardrails.md](references/guardrails.md#reviewer-independence-fallback). Never treat an implementer's completion report or self-review as independent approval.
 
 ## Owner gates
 

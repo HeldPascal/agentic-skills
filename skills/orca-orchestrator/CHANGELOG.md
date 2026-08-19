@@ -2,6 +2,12 @@
 
 All notable changes to the `orca-orchestrator` skill are documented here. This skill's `version` (in `SKILL.md` frontmatter) follows [Semantic Versioning](https://semver.org/): breaking changes to the state/config schema or the skill's behavioral contract bump the major version, additive changes bump the minor version, and clarifications/fixes bump the patch version.
 
+## 0.4.0
+
+- Split `registry.json` (revisable routing beliefs) from a new `capabilities.json` (mechanical snapshot written wholesale by `discover.py --write`); nothing wrote to `registry.json` automatically before, and the two had been conflated under "capability registry" language.
+- Removed cross-file duplication of the reviewer-independence fallback order, `TAKE_OVER` closure steps, and `termination_reason` list: `guardrails.md` is now the single source, `SKILL.md`/`workflow.md`/`routing.md`/`state.md` reference it instead of restating it.
+- Added tests for `discover.py` and `doctor.py`, which previously had no coverage.
+
 ## 0.3.0
 
 - Split execution into separate Developer/Tester/Reviewer roles (orthogonal to Junior/Senior level), with isolated contexts and an explicit intra-role vs. cross-role review distinction.

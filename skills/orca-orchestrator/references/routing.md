@@ -26,12 +26,12 @@ Avoid overly detailed classifications when evidence is sparse.
 
 It deliberately does **not** enumerate which cloud models an account/key can reach, and cannot discover effort levels dynamically: cloud providers do not expose a generic "list models and effort levels for this key" endpoint, and effort is a request-time parameter rather than a queryable model property. Keep `KNOWN_EFFORT_LEVELS` in `discover.py` in sync with current provider documentation instead of trying to probe it.
 
-Run discovery:
+Run `scripts/discover.py --write`:
 
-- at orchestration start when the registry is stale or missing entries for harnesses/backends the task may need,
+- at orchestration start when `capabilities.json` is stale or missing entries for harnesses/backends the task may need,
 - again mid-task only if a specific capability (a backend, a cloud harness, an effort level) turns out to be required and its availability was not already confirmed.
 
-Do not re-run discovery on a fixed schedule inside a single task; it does not change fast enough within one task's lifetime to justify that.
+`--write` persists the result to `capabilities.json` (see [state.md](state.md#capabilities-schema)), overwriting the prior snapshot; it never touches `registry.json`. Do not re-run discovery on a fixed schedule inside a single task; it does not change fast enough within one task's lifetime to justify that.
 
 ## Evidence hierarchy
 
@@ -128,11 +128,9 @@ Never start another Junior rework round after `max_rework_rounds` is reached.
 
 ## Review routing
 
-Prefer a Senior reviewer using a different model and fresh context from the implementer.
+Independence requirements for the Reviewer role are defined in [guardrails.md](guardrails.md#reviewer-independence-fallback); this section is only about which combination to route to within that constraint.
 
-If no practical alternative model exists, a same-model reviewer may be used only in a fresh isolated context without the implementer's reasoning/self-justification. For high-risk tasks, insufficient independence requires another verification mechanism or an Owner gate.
-
-Reviewer selection itself can learn from evidence. A model/harness combination that is strong at implementation is not automatically the best reviewer.
+Reviewer selection can learn from evidence like any other role. A model/harness combination that is strong at implementation is not automatically the best reviewer. `aggregates.json` groups by harness/model/backend/effort only, not by role, so when reasoning about reviewer fitness, weight raw observations that carry `role: reviewer` (see [state.md](state.md#observation-schema)) more heavily than the combination-level aggregate, which mixes all roles together.
 
 ## Guardrail-aware routing
 

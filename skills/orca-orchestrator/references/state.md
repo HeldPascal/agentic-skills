@@ -17,6 +17,7 @@ config root/
 
 state root/
 ├── registry.json
+├── capabilities.json
 ├── aggregates.json
 ├── observations.jsonl
 ├── tasks/
@@ -31,7 +32,10 @@ The layers have different purposes:
 - `observations.jsonl`: active append-only empirical observations,
 - `archive/`: preserved older raw observations removed from the regular loading path,
 - `aggregates.json`: deterministic statistics derived from active + archived observations,
-- `registry.json`: compact, revisable routing beliefs derived from evidence.
+- `registry.json`: compact, revisable **routing beliefs** derived from evidence — subjective, evolves only from observations,
+- `capabilities.json`: mechanical **capability snapshot** written by `scripts/discover.py --write` — objective, overwritten wholesale on every discovery run, not learned.
+
+Do not conflate these last two. `registry.json` answers "what do we believe about how well X performs"; `capabilities.json` answers "what is currently installed/reachable". A stale `capabilities.json` means re-run discovery; a stale-feeling `registry.json` means gather more observations. Neither script writes the other's file.
 
 ## Task guardrail state
 
@@ -117,14 +121,7 @@ Observations are immutable records. Fields may be omitted when unknown.
 }
 ```
 
-Useful `termination_reason` values include:
-
-- `rework_limit_reached`,
-- `spec_revision_limit_reached`,
-- `dispatch_limit_reached`,
-- `elapsed_time_limit_reached`,
-- `blocking_timeout`,
-- `independent_review_unavailable`.
+`termination_reason` values are defined in [guardrails.md](guardrails.md#budget-exhaustion-record); reuse them verbatim here rather than inventing new spellings.
 
 Do not fabricate missing metrics. Unknown is preferable to false precision.
 
@@ -179,6 +176,22 @@ Entries should summarize evidence rather than encode immutable rules. Recommende
 
 Qualitative registry beliefs should remain traceable to supporting raw observations/aggregates. A registry belief must not rewrite or delete contradictory evidence.
 
+## Capabilities schema
+
+`capabilities.json` is written wholesale by `scripts/discover.py --write`; it is not hand-edited and not incrementally merged:
+
+```json
+{
+  "schema_version": 1,
+  "updated_at": "2026-08-19T08:00:00Z",
+  "tools": {},
+  "backends": {},
+  "cloud": {}
+}
+```
+
+`tools`, `backends`, and `cloud` mirror `discover.py`'s stdout output (see [routing.md](routing.md#discovery)): installed CLI availability/version, local backend model listings (e.g. LM Studio), and per-harness cloud-auth signal plus known effort levels. Each `--write` run fully replaces the prior snapshot with what was just observed — there is no history here; use `observations.jsonl` if you need history of what was actually used.
+
 ## Compaction
 
 The active `observations.jsonl` should remain small enough to load recent relevant evidence without unbounded context growth.
@@ -206,8 +219,10 @@ python scripts/state.py observe '{"task_type":"implementation","harness":"pi","m
 python scripts/state.py show observations
 python scripts/state.py show aggregates
 python scripts/state.py show registry
+python scripts/state.py show capabilities
 python scripts/state.py aggregate
 python scripts/state.py compact
+python scripts/discover.py --write
 ```
 
 Prefer these helpers over free-form edits of structured state.
@@ -218,6 +233,7 @@ Prefer these helpers over free-form edits of structured state.
 - Compaction may move raw observations from active state into the archive, but must preserve them unchanged in meaning.
 - Aggregates are deterministic derived data and may be rebuilt at any time.
 - Registry summaries may be updated as evidence changes.
+- Capabilities are deterministic derived data like aggregates, but from live discovery rather than history: `capabilities.json` may be wholesale overwritten by `discover.py --write` at any time, and must never be updated with routing beliefs — those belong in `registry.json`.
 - Never store mutable state in the installed skill directory.
 - Include `schema_version` in all structured state files.
 - Do not silently discard state that uses a newer schema version.
