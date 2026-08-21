@@ -2,6 +2,10 @@
 
 All notable changes to the `orca-orchestrator` skill are documented here. This skill's `version` (in `SKILL.md` frontmatter) follows [Semantic Versioning](https://semver.org/): additive changes bump the minor version and clarifications/fixes bump the patch version, at any version. Before `1.0.0`, breaking changes to the state/config schema or the skill's behavioral contract also bump the minor version — semver's own pre-1.0 convention, where the public contract is still being established and every version may change it; from `1.0.0` onward, breaking changes bump the major version instead.
 
+## 0.8.1
+
+- Clarified startup lifecycle in `SKILL.md`: `scripts/state.py init` is now the explicit first mandatory step in [Before orchestrating](SKILL.md#before-orchestrating), run before reading `capabilities.json`, `registry.json`, aggregates, observations, or starting any task — on every orchestration session, not as a one-time or operator-run setup step. `init` was already idempotent (it creates state on a first run and only fills in newly introduced default keys otherwise, never resetting or deleting existing observations, registry beliefs, aggregates, capabilities, or task history); this only makes the ordering explicit in the workflow text. No behavioral change to `scripts/state.py`.
+
 ## 0.8.0
 
 Addresses gaps exposed by the first real orchestration run against the Junior/Senior execution model.
