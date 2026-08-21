@@ -36,6 +36,47 @@ When `max_rework_rounds` is reached:
 
 Repeated technical failures are not rework rounds, but they still count toward task dispatch/resource limits.
 
+## Operator/environment maintenance
+
+Distinguish a harness/environment that cannot start from a worker that attempted the task
+and produced a poor result. Examples of the former: a required software update, an
+interactive login/re-authentication, a missing permission grant, a license/quota block, or
+other machine-level maintenance the Orchestrator cannot perform itself.
+
+A worker that was started/issued and then blocked on maintenance during startup was still a
+dispatch — see [workflow.md](workflow.md#retry-versus-rework): `max_dispatches` tracks
+resource use (how many workers were started), which is a different question from whether
+that worker's attempt says anything about the routed model/harness's task performance. This
+section is only about the latter.
+
+1. Record the `dispatch` as usual (it consumed a worker start and a slot of `max_dispatches`
+   like any other), but do not record a `technical_retry` or a `kind: execution` observation
+   attributing the failure to the routed model/harness — no task-related execution
+   happened, so there is nothing to say about that combination's performance.
+2. This does not need its own persistent guardrail counter or limit: there is no
+   `max_environment_maintenance_events`, and none is being proposed. Maintenance-blocked
+   starts are already indirectly bounded, since each one still consumes a dispatch (step 1)
+   and so counts toward `max_dispatches` like any other; a dedicated counter would only
+   duplicate that. The two things that do carry concrete value already have a place:
+   - if resolving the blocker requires owner action, the Owner gate itself is the record
+     (step 4 below),
+   - if the retry dispatch issued after repair (step 5) succeeds, a short note in *that*
+     dispatch's `kind: execution` observation `notes` (e.g. "a prior dispatch needed a
+     harness update before this attempt could start") preserves the context without a
+     dedicated field.
+3. If the Orchestrator can resolve the blocker itself (e.g. a routine, non-destructive
+   update it is already permitted to run), do so and then dispatch normally.
+4. If resolving it requires an owner-level action (credentials, interactive login,
+   permissions, purchasing/licensing), create an Owner gate describing exactly what
+   maintenance is needed — this is a genuine gate, not routine implementation.
+5. Once the environment is repaired, dispatch the originally intended work again. This is a
+   new, separately-counted `dispatch` against `max_dispatches` — the blocked attempt already
+   consumed its own dispatch count in step 1, and this retry consumes another.
+6. If maintenance cannot be completed and no alternative route exists, finish the task with
+   `termination_reason: environment_maintenance_required` (see
+   [Budget exhaustion record](#budget-exhaustion-record)) rather than reporting the
+   model/harness as incapable of the task.
+
 ## Reviewer independence fallback
 
 Prefer a reviewer that differs from the implementer in both model identity and execution context.
@@ -94,6 +135,8 @@ At minimum count dispatches created for the task, including Developer, Tester, R
 
 If `max_elapsed_minutes` is configured, treat it as an additional hard ceiling measured from orchestration start. Do not fake precise elapsed-time accounting when the runtime cannot provide it reliably.
 
+A stalled or looping Junior dispatch (see [workflow.md](workflow.md#detecting-a-stalled-or-looping-junior)) does not get a separate numeric threshold: stopping it and escalating to Senior evaluation draws on these same dispatch/rework counters, since a stopped attempt followed by a new dispatch or rework round is exactly what those counters already bound.
+
 Future versions may add token or monetary budgets when those metrics are reliably available from the selected providers.
 
 ## Blocking communication timeout
@@ -122,6 +165,7 @@ When any guardrail terminates autonomous recovery, record the reason in the task
 - `dispatch_limit_reached`,
 - `elapsed_time_limit_reached`,
 - `blocking_timeout`,
-- `independent_review_unavailable`.
+- `independent_review_unavailable`,
+- `environment_maintenance_required` (see [Operator/environment maintenance](#operatorenvironment-maintenance) — the task ended because required maintenance could not be completed, not because a worker performed poorly).
 
 These observations are routing evidence: repeated exhaustion with a harness/model combination can justify different future routing without hard-coding universal conclusions.

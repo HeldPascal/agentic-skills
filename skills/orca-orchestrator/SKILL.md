@@ -2,7 +2,7 @@
 name: orca-orchestrator
 description: Orchestrate software-engineering work through Orca with spec-first planning, role-separated Junior/Senior execution, independent review, adaptive harness/model/locality routing, bounded autonomous recovery, and minimal project-owner intervention.
 metadata:
-  version: "0.7.0"
+  version: "0.8.0"
 ---
 
 # Orca Orchestrator
@@ -16,8 +16,8 @@ See [CHANGELOG.md](CHANGELOG.md) for behavioral/schema changes across versions.
 ## Core principles
 
 1. **Spec first.** Before implementation, make the task sufficiently precise that implementation and testing can proceed independently against the same frozen intent.
-2. **Separate roles from levels.** Developer, Tester, and Reviewer are separate roles with separate contexts working only against the frozen spec; Junior/Senior is an orthogonal authority/cost level within each role. See [workflow.md](references/workflow.md#roles).
-3. **Separate execution from judgment.** Junior workers perform bulk implementation, testing, exploration, and troubleshooting. Senior workers spend higher-cost judgment on planning, review, escalation, and takeover.
+2. **Separate roles from levels.** Developer, Tester, and Reviewer are separate roles with separate contexts working only against the frozen spec; Junior/Senior is an orthogonal authority/cost level within each role. Developer and Tester are never collapsed into one dispatch for implementation tasks, regardless of task size — see [workflow.md](references/workflow.md#roles) and [Independent implementation and verification](references/workflow.md#independent-implementation-and-verification).
+3. **Separate execution from judgment.** By default, a Junior makes one bounded, single-pass attempt at implementation, testing, or exploration and reports its concrete result or failure — it does not debug indefinitely or broaden its own task unless the dispatch explicitly assigns troubleshooting/debugging. Senior workers, or an explicitly-assigned troubleshooting/debugging dispatch, spend higher-cost judgment on planning, review, escalation, takeover, and deeper iterative diagnosis. See [Junior execution contract](references/workflow.md#junior-execution-contract).
 4. **Independent review.** A reviewer must not simply endorse the implementer. Prefer a different model and fresh context. When that is unavailable, use the defined review fallback rather than informal self-review.
 5. **Iterate before escalating to the owner.** A Senior `RETURN` should normally create Junior rework, but only within configured recovery limits.
 6. **Bound autonomous recovery.** Rework, specification repair, dispatches, blocking waits, and optional elapsed time have explicit limits. Do not silently exceed them.
@@ -44,6 +44,7 @@ Do not assume the XDG environment variables are set.
 5. Classify the task sufficiently for routing; avoid elaborate taxonomy when a simple classification is enough.
 6. Create a frozen task specification for Developer, Tester, and Reviewer work (see [workflow.md](references/workflow.md#roles)).
 7. Run `scripts/task.py start` before any dispatch, to snapshot task counters for dispatches, rework rounds, spec revisions, and elapsed time. Do not dispatch before this has run.
+8. Resolve the current Orca worker-completion call once for the session (see [Worker completion mechanism](references/workflow.md#worker-completion-mechanism)); reuse it for every dispatch's copy of [worker-contract.md](references/worker-contract.md) rather than re-resolving it per dispatch or leaving it for the worker to discover.
 
 See:
 
@@ -51,6 +52,7 @@ See:
 - [routing.md](references/routing.md)
 - [guardrails.md](references/guardrails.md)
 - [state.md](references/state.md)
+- [worker-contract.md](references/worker-contract.md) — the small, explicit contract to hand to every dispatched worker
 
 ## Default execution loop
 
@@ -58,8 +60,8 @@ Use the following loop unless the task clearly warrants a simpler path (see [wor
 
 1. **Plan/specify** the task and acceptance criteria; freeze the spec before Developer and Tester start.
 2. **Select** Junior harness/model/locality for Developer and, separately, for Tester, based on evidence, task fit, cost, latency, and uncertainty.
-3. **Dispatch** Developer and Tester in separate isolated contexts derived only from the frozen spec, each recorded with `scripts/task.py record --event dispatch`, provided task limits allow another dispatch. Neither receives the other's intermediate reasoning.
-4. **Verify** that Developer and Tester actually ran relevant checks; do not rely solely on their completion reports. Record a `kind: execution` observation for each dispatch (Developer, Tester, Reviewer, rework, takeover) via `scripts/state.py observe --task-id <task_id> '{"kind":"execution", ...}'` as it finishes — one per dispatch, not one for the whole task (see [state.md](references/state.md#observation-schema)).
+3. **Dispatch** Developer and Tester in separate isolated contexts derived only from the frozen spec, provided task limits allow another dispatch, each recorded with `scripts/task.py record --event dispatch` when the worker is started/issued (this consumes `max_dispatches` regardless of what happens next). Neither receives the other's intermediate reasoning. Include a copy of [worker-contract.md](references/worker-contract.md) in every dispatch's initial context with that dispatch's level and the session's resolved completion call already filled in — do not leave either for the worker to determine. If the worker instead fails to start because of an [operator/environment-maintenance blocker](references/guardrails.md#operatorenvironment-maintenance), the dispatch still counts, but do not record a `technical_retry` or a `kind: execution` observation for it — that distinction is about execution evidence, not about whether it was a dispatch.
+4. **Verify** that Developer and Tester actually ran relevant checks; do not rely solely on their completion reports. Record a `kind: execution` observation for each dispatch that reached task-related execution (Developer, Tester, Reviewer, rework, takeover) via `scripts/state.py observe --task-id <task_id> '{"kind":"execution", ...}'` as it finishes — one per such dispatch, not one for the whole task (see [state.md](references/state.md#observation-schema)). The one explicit exception is a dispatch blocked by [operator/environment maintenance](references/guardrails.md#operatorenvironment-maintenance) before it could attempt the task: it still counted toward `max_dispatches` in step 3, but gets no `kind: execution` observation, since it produced no execution to describe.
 5. **Converge**: run the Tester's checks against the Developer's implementation. If either level disagrees within a role (e.g. a Senior Developer/Tester correction), treat that as an intra-role review round, not a separate escalation.
 6. **Review** with a Senior Reviewer, independent of both Developer and Tester, against the frozen specification and actual repository state.
 7. Interpret review as one of:
@@ -120,8 +122,9 @@ For low-risk, well-specified tasks, occasionally explore under-tested viable com
 Use the state helper scripts when available rather than manually rewriting structured state. Calling them is mandatory, not optional best practice:
 
 - `scripts/task.py start` before the first dispatch of a task.
-- `scripts/task.py record` after every dispatch, rework round, spec revision, technical retry, or blocking timeout.
-- `scripts/state.py observe --task-id <task_id> '{"kind":"execution", ...}'` after each Developer/Tester/Reviewer/rework/takeover dispatch finishes.
+- `scripts/task.py record --event dispatch` when a worker is started/issued, including one that then fails to start on an operator/environment-maintenance blocker — that event still consumed a dispatch slot. Do not additionally record a `technical_retry` for that same blocked attempt (see [guardrails.md](references/guardrails.md#operatorenvironment-maintenance)).
+- `scripts/task.py record` after every rework round, spec revision, technical retry (for an attempt that actually ran and failed technically, not a maintenance blocker), or blocking timeout.
+- `scripts/state.py observe --task-id <task_id> '{"kind":"execution", ...}'` after each Developer/Tester/Reviewer/rework/takeover dispatch finishes, except a dispatch blocked by operator/environment maintenance before it reached task-related execution — that one still counted toward `max_dispatches`, but gets no execution observation.
 - `scripts/task.py finish`, then `scripts/state.py observe --task-id <task_id> '{"kind":"task", ...}'`, in that order, before the task is reported complete.
 
 A task is not complete if these calls were skipped, even if the underlying work is done. If you reach the end of a task and cannot recall calling them, call `scripts/task.py status` to check, and record the missing `kind: task` observation before finishing.
