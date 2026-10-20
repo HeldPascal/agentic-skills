@@ -62,18 +62,38 @@ their own terminal handle.
 
 ## Settling workers
 
-On every `worker_done`, check outcome, files and report path against the assignment, decide the
-terminal's next owner as the guide describes (normally `orca orchestration worker-release
---dispatch <id>`), then acknowledge. Before ending a phase,
+On every `worker_done`, check outcome, files and report path against the assignment, then decide
+the terminal's next owner before acknowledging:
+
+- **Authors** (spec author after the spec phase, test author and implementer after initial
+  development): keep them for later revision or repair with
+  `orca orchestration worker-retain --dispatch <id>` - this is the workflow's policy, so it
+  counts as requested retention.
+- **Judges** (spec critic, reviewers) and authors whose package is accepted:
+  `orca orchestration worker-release --dispatch <id>`.
+
+Then `check --ack <delivery id>`. When a package is accepted,
 `orca orchestration worker-list --run <run> --terminal-state reclaimable --json` must be empty.
 
-## Repair in existing worktrees
+## Continuing a worker (revision, repair)
 
-Fast-forward the worker branch to the integration state
-(`git -C <path> merge --ff-only <integration branch>`), re-render the prompt in mode `repair`,
-and start the worker with `--worktree path:<path>`.
+Fast-forward its worktree to the integration branch
+(`git -C <path> merge --ff-only <integration branch>`), render the prompt in mode `repair` (or
+`revision`), create a task for it and dispatch it to the same terminal:
 
-## Cleanup
+```
+orca orchestration task-create --spec "$(cat <prompt.md>)" --task-title "<wp> <role> repair" --json
+orca orchestration worker-start --task <task id> --terminal <worker's terminal handle> \
+  --worktree path:<path> --json
+```
 
-Worker worktrees and branches are merged into the integration branch; remove them
-(`orca worktree rm`) only after the user agrees.
+`worker-show --dispatch <id>` gives the terminal handle; model and effort stay as launched.
+A **fresh** repair worker instead gets a new worktree from the integration branch
+(`orca worktree create --name <wp>-<role>-repair --base-branch <integration branch> ...`) and a
+normal `worker-start --worktree path:<path>`.
+
+## Cleanup after a package is accepted
+
+Release its workers, then remove its worker worktrees and their merged branches:
+`orca worktree rm --worktree path:<path>` and `git branch -d <branch>` (`-d` refuses unmerged
+branches - investigate instead of forcing). Keep them only if the user asked to.

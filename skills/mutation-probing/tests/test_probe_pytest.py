@@ -7,7 +7,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import probe
+import probe_pytest as probe
 
 
 @pytest.fixture

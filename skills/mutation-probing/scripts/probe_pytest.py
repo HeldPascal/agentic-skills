@@ -9,7 +9,7 @@ with the project's normal import configuration. No file is modified.
 
 Usage (run inside the project's environment so the code and pytest import):
 
-    uv run python probe.py --mutants mutants.json [--json result.json] \
+    uv run python probe_pytest.py --mutants mutants.json [--json result.json] \
         [--timeout 600] -- tests/area -q
 
 mutants.json is a list of objects with keys ``id``, ``module``, ``old``,

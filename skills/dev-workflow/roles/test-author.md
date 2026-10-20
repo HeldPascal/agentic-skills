@@ -11,7 +11,7 @@ Write the authoritative tests for a work package from its specification. Read
 - **Design before writing:** list the plausible failure classes for this component (from the
   spec and from `references/testing.md`), then choose a compact set of tests that would catch
   them. Breadth of meaningful failure classes beats volume of cases.
-- **Red-first:** run your tests against the baseline skeleton. Collection must succeed; failures
+- **Red-first:** run your tests against the baseline skeleton. The tests must build and load; failures
   must have behavioral causes (not-implemented, missing validation, wrong values). Tests that
   legitimately pass on the skeleton (declarations, structure) are fine - list them and why.
 - Do not build your own reference implementation or run a mutation campaign; independent

@@ -4,8 +4,10 @@
 Stages and commands come from a small JSON file the coordinator writes once per
 project from the repository's documented commands, for example:
 
-    {"fast": [{"name": "lint", "cmd": "uv run ruff check ."}],
-     "full": [{"name": "tests", "cmd": "uv run pytest -q"}]}
+    {"fast": [{"name": "lint", "cmd": "npm run lint"}],
+     "full": [{"name": "tests", "cmd": "npm test"}]}
+
+Any shell command works - the script does not assume a language or tool.
 
 Usage:
     run_checks.py --config checks.json --stage fast [--stage full]

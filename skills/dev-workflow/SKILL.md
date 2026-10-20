@@ -1,6 +1,8 @@
 ---
 name: dev-workflow
 description: Spec-first, multi-agent software development workflow - a coordinator runs requirements discovery, spec author/critic dialogue, independently developed tests and implementation, integration with failure classification, cross-model code and test review, and evidence-based completion. Use when coordinating a non-trivial feature or milestone through several agents (e.g. with Orca), or when you were dispatched as one of its roles (spec author/critic, test author, implementer, code or test reviewer).
+metadata:
+  version: "0.1.0"
 ---
 
 # Development workflow
@@ -13,7 +15,7 @@ different model family, and repairs what review finds - all with evidence, not c
 discovery -> decomposition -> per work package:
   spec (author <-> critic) -> baseline -> tests || implementation -> integration
   -> cross-model review (code || tests) -> repair -> accepted
--> final verification and report -> retrospective
+-> final verification and report
 ```
 
 ## Find your role
@@ -23,7 +25,7 @@ files unless your role file tells you to.
 
 | Role | File | Also uses |
 | --- | --- | --- |
-| Coordinator | `roles/coordinator.md` | `references/orca.md`, skills `requirements-discovery`, `spec-critique` |
+| Coordinator | `roles/coordinator.md` | `references/orca.md` (on Orca), skills `requirements-discovery`, `spec-critique` |
 | Spec Author | `roles/spec-author.md` | - |
 | Spec Critic | `roles/spec-critic.md` | skill `spec-critique` |
 | Test Author | `roles/test-author.md` | `references/testing.md` |
@@ -39,7 +41,8 @@ role, its mode and the skills to load.
 - Skills: `requirements-discovery`, `spec-critique` and `mutation-probing` (same repository,
   installed together with this one) for every agent harness that receives work; on Orca also
   Orca's `orchestration` skill.
-- Tools: `git`, `python3` (3.11+) for the helper scripts; the project's own toolchain.
+- Tools: `git`; `python3` (3.11+) to run the helper scripts - the project itself can use any
+  language and toolchain.
 - The coordinator verifies all of this with `scripts/check_requirements.py` before dispatching.
 
 ## Authority of intent

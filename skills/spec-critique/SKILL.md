@@ -1,6 +1,8 @@
 ---
 name: spec-critique
 description: Rigorously and independently critique a specification, design document, ADR, plan or other technical draft before anyone relies on it - completeness, consistency, testability, unnecessary prescription, downstream needs and fidelity to the stated intent. Use when asked to review or critique a draft spec/design/plan, when a draft (your own or another model's) should be checked before the user sees it, or as the critic in a spec author/critic dialogue.
+metadata:
+  version: "0.1.0"
 ---
 
 # Spec critique

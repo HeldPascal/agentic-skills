@@ -1,6 +1,8 @@
 ---
 name: mutation-probing
-description: Find gaps in an existing test suite with a few targeted, hand-picked mutation probes - plausible defects injected one at a time, in memory, to see whether the tests notice. Use when reviewing tests or a change, auditing test quality, or checking whether "all green" really means the behavior is verified. Not a full mutation-testing campaign.
+description: Find gaps in an existing test suite with a few targeted, hand-picked mutation probes - plausible defects injected one at a time to see whether the tests notice. Works for any language and test runner. Use when reviewing tests or a change, auditing test quality, or checking whether "all green" really means the behavior is verified. Not a full mutation-testing campaign.
+metadata:
+  version: "0.1.0"
 ---
 
 # Mutation probing
@@ -15,28 +17,30 @@ investigate the component's highest-risk failure classes; no fixed count is requ
 
 ## Requires
 
-The bundled harness needs Python 3.11+ and the project's Python environment with pytest. For
-other languages or test runners, use the manual approach described at the end of section 2 -
-that is the only sanctioned fallback; do not improvise a different harness.
+- A git repository and the project's test command (whatever it is: `npm test`, `cargo test`,
+  `go test ./...`, `make check`, `pytest`, ...).
+- `python3` (3.11+) to run the bundled scripts.
+
+Use the bundled harnesses or the manual procedure below; do not improvise another harness.
 
 ## 1. Choose probes from risk, not from syntax
 
-Read the contract (spec, docstrings, README) and the code under test, then ask: *which
-realistic mistakes would a developer make here, and would they matter?* Good probe families:
+Read the contract (spec, API docs, README) and the code under test, then ask: *which realistic
+mistakes would a developer make here, and would they matter?* Good probe families:
 
-- **State and history:** forget earlier entries (clear a cache/map after lookup), reuse the
-  first resolved object for every later request, share a counter between instances.
+- **State and history:** forget earlier entries (clear a cache or map after a lookup), reuse
+  the first resolved object for every later request, share a counter between instances.
   Single-entity test fixtures hide these.
-- **Value preservation:** drop or reset fields while passing a record through a stage
-  (keep only the classification, lose measurements/metadata/provenance), convert types
-  silently (`-0.0` to `0.0`, `1.0` to `1`, tuple to list).
-- **Boundaries:** shift a limit by one (`<` vs `<=`, `max` vs `max + 1`), accept the first
-  value outside a range, skip validation for one input class.
-- **Error handling:** swallow an exception, wrap it in another category, lose `__cause__`,
-  catch `BaseException` and convert interrupts, re-raise a cleanup error instead of the
-  original.
-- **Ordering and identity:** reverse an iteration, include an excluded field in a key or
-  hash, drop a field from a key, reorder positional outputs.
+- **Value preservation:** drop or reset fields while passing a record through a stage (keep
+  only the classification, lose measurements, metadata, provenance), convert values silently
+  (integer vs. float, signed zero, precision, ordered vs. unordered collections).
+- **Boundaries:** shift a limit by one (`<` vs `<=`, `max` vs `max + 1`), accept the first value
+  outside a range, skip validation for one input class.
+- **Error handling:** swallow an error, report it in another category, lose the original
+  cause, convert interrupts or cancellation into ordinary errors, let a cleanup failure replace
+  the original error.
+- **Ordering and identity:** reverse an iteration, include an excluded field in a key or hash,
+  drop a field from a key, reorder positional outputs.
 - **Counting and accounting:** reset or skip a counter increment, count per attempt instead of
   per entity, stop a loop early or late.
 
@@ -45,56 +49,50 @@ impossible states. Note them as equivalent if you considered them.
 
 ## 2. Run the probes
 
-For Python projects tested with pytest, use the bundled harness. It runs the unmutated
-baseline first, then each mutant in its own fresh interpreter. An import hook hands the target
-module mutated source **the first time it is imported** (normally while pytest collects the
-tests), so the module executes once, under the project's normal import configuration
-(`pythonpath`, conftest, editable installs), and every importer - including package
-re-exports - sees the mutated objects. **No file is modified.**
+**Any language - `scripts/probe_files.py`.** Each mutant replaces one exact text fragment in
+one file. The script creates a temporary detached git worktree of the committed state, runs the
+test command once unmutated (baseline), then for every mutant applies the replacement, runs the
+command and restores the file. Your working tree is never touched; the scratch worktree is
+removed afterwards.
 
 ```bash
-# mutants.json: [{"id": "M1", "module": "pkg.runner", "old": "<exact fragment>",
+# mutants.json: [{"id": "M1", "file": "src/runner.ts", "old": "<exact fragment>",
 #                 "new": "<replacement>", "description": "forget instance history"}]
-uv run python <skill-dir>/scripts/probe.py --mutants mutants.json --json probes.json \
-    -- tests/area -q -p no:cacheprovider
+python3 <skill-dir>/scripts/probe_files.py --mutants mutants.json --json probes.json \
+    -- npm test -- tests/runner
 ```
 
-- Run it inside the project's environment (`uv run python`, the venv's `python`, ...), so the
-  code under test and pytest import. Use `--python` to name another interpreter.
-- `old` must occur exactly once in the module; widen the fragment until it is unique.
-- Statuses: `KILLED` (tests failed or could not be collected because of the mutation - good),
-  `SURVIVED` (gap), `NOT_EXERCISED` (the selected tests never imported the module in-process -
-  wrong module name or test selection), `INVALID` (fragment not unique), `ERROR` (mutated
-  source does not compile, unsupported loader, broken run), `TIMEOUT`. The JSON output keeps
-  the last lines of each run, so you can check *why* a probe was killed.
-- Exit status: 0 all killed, 1 some survived, 2 invalid input, failing baseline, or any
-  `INVALID`/`ERROR`/`NOT_EXERCISED`/`TIMEOUT`. A failing baseline stops the run - deselect
-  known failures with pytest arguments (`--deselect <node-id>`) and say so in the report.
+- The fragment must occur exactly once in the file; widen it until it is unique.
+- It probes the committed state (`--ref`, default `HEAD`): commit what you want to probe.
+- The test command runs in a fresh checkout: dependencies or build steps that live outside the
+  repository (virtual environments, `node_modules`, build caches) must be created by the
+  command or already be shareable. Select a narrow test subset to keep runs fast.
+- Statuses: `KILLED` (command failed - read the output tail: a test failure is the evidence you
+  want, a build error only shows the mutation does not compile), `SURVIVED` (gap), `INVALID`
+  (file missing or fragment not unique), `TIMEOUT`. Exit status: 0 all killed, 1 some survived,
+  2 invalid input, failing baseline, or any `INVALID`/`TIMEOUT`.
 
-**Limitations - check before calling a survivor a gap.** The mutation exists only in the
-pytest process. Code executed elsewhere runs unmutated: subprocesses (e.g. CLI tests that start
-the program), spawned or forked workers, external executables, and modules re-loaded from
-source. If the tests that should catch a probe exercise the code that way, a `SURVIVED` result
-proves nothing; use a scratch copy of the project with the mutation applied to the file
-instead. Only modules loaded by Python's standard source loader can be probed; extension
-modules, zip imports and modules loaded through custom import hooks are reported as `ERROR`.
-pytest's assertion rewriting is handled (the target module itself is not rewritten).
+**Python with pytest - faster in-process harness.** For Python projects tested with pytest,
+`scripts/probe_pytest.py` applies mutations in memory without a checkout per run. Read
+`references/python-pytest.md` before using it; it has limitations (subprocesses run unmutated)
+that decide which harness fits.
 
-For other languages or runners, apply the same idea by hand: mutate in a scratch copy or via
-monkeypatching inside a test session, never in the working tree you are reviewing.
+**Manual procedure** (only if neither script fits, e.g. no git): copy the project to a scratch
+location, apply one mutation, run the tests, record the result, restore, repeat. Never mutate
+the working tree you are reviewing.
 
 ## 3. Report
 
 For each surviving probe report:
 
-1. The probe (module, fragment, replacement) and the plausible defect it represents.
+1. The probe (file or module, fragment, replacement) and the plausible defect it represents.
 2. Why it matters (which contract clause or downstream behavior it would break).
 3. The smallest test change that would kill it - preferably strengthening or parametrizing an
    existing test rather than adding a new one.
 
 Also list killed probes briefly (they document what *is* verified) and equivalent probes you
-skipped. Treat the result as diagnostic evidence about the suite, not as a score: a killed
-probe does not prove the test is good, and a survivor is not automatically a defect in the
-production code.
+skipped, and give the mutants file so the probes can be re-run. Treat the result as diagnostic
+evidence about the suite, not as a score: a killed probe does not prove the test is good, and a
+survivor is not automatically a defect in the production code.
 
 When tests are added in response, re-run the same probes to confirm they are now killed.

@@ -44,9 +44,11 @@ instead of documenting a trade-off that quietly overrides it.
 
 ## Skeleton (after ACCEPT, when new code is involved)
 
-Create the declared public interface only: imports, classes, protocols, dataclasses with fields,
-signatures with types, one-line docstrings; behavior raises `NotImplementedError`. It must pass
-the project's lint, type and existing test checks. Ask the critic to verify it matches the spec
+Create the declared public interface only, in the project's language: modules, types, fields,
+function and method signatures, short doc comments. Every behavior is a stub that fails
+deliberately and recognizably (e.g. `raise NotImplementedError` in Python, `throw new
+Error("not implemented")` in TypeScript, `unimplemented!()` in Rust). It must build and pass the
+project's lint, type and existing test checks. Ask the critic to verify it matches the spec
 and fix any mismatch. Do not write tests. Dependency changes the spec needs are listed in your
 report for the coordinator to apply.
 

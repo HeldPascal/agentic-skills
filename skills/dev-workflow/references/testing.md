@@ -26,12 +26,12 @@ relevant - they are review heuristics, not mandatory tests for every component:
   systems; two keys in one store), including failure of one next to success of another.
 - **Values lost or changed between stages.** When data passes through validation, conversion,
   orchestration or persistence, assert the full values that arrive downstream - not only counts
-  or a classification - and compare type-sensitively where `True`, `1`, `1.0` or `-0.0` and
-  `0.0` could be confused.
+  or a classification - and compare type-sensitively where the language could confuse values
+  (e.g. `True`/`1`/`1.0` or `-0.0`/`0.0` in Python, `0`/`""`/`null` under loose equality).
 - **Only-positive equality.** Where values must differ, test inequality too.
-- **Error propagation details.** Exception category, identity and cause chain; interrupts
-  (`KeyboardInterrupt`, `SystemExit`) passing through unchanged; cleanup failures not masking
-  the original error.
+- **Error propagation details.** Error category, identity and cause chain; interrupts and
+  cancellation (e.g. signals, `KeyboardInterrupt`, context cancellation) passing through
+  unchanged; cleanup failures not masking the original error.
 
 ## Quality
 

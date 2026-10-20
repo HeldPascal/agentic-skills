@@ -8,7 +8,7 @@ Implement a work package against its specification and baseline skeleton.
   skeleton (names, signatures, field order, defaults, exported names). Private helpers are fine.
 - A test author works on the same spec in parallel; obey the isolation rules in your assignment.
   Do not add or edit files under the test paths - the suite of record comes from the test author.
-  Throwaway sanity checks (scripts, `python -c`) are welcome; reproduce golden values from the
+  Throwaway sanity checks (small scripts, a REPL) are welcome; reproduce golden values from the
   spec.
 - **Reuse before building:** use the validation, conversion and helper code that earlier work
   packages already provide instead of re-implementing parallel versions.
