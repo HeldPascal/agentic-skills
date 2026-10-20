@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -184,25 +186,29 @@ def _run_child(
             "pytest_args": pytest_args,
         }
     )
+    # Own process group, so a timeout also stops processes the tests started.
+    process = subprocess.Popen(
+        [python, "-c", _CHILD],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
     try:
-        completed = subprocess.run(
-            [python, "-c", _CHILD],
-            input=payload,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        output, _ = process.communicate(input=payload, timeout=timeout)
     except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
         return _ChildResult(None, None, [f"timed out after {timeout:g}s"])
     state = None
     lines = []
-    for line in (completed.stdout + completed.stderr).splitlines():
+    for line in output.splitlines():
         if line.startswith(_STATE_PREFIX):
             state = json.loads(line[len(_STATE_PREFIX) :])
         elif line.strip():
             lines.append(line)
-    return _ChildResult(completed.returncode, state, lines)
+    return _ChildResult(process.returncode, state, lines)
 
 
 def classify(result: _ChildResult) -> str:

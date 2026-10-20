@@ -1,5 +1,7 @@
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -371,3 +373,50 @@ def test_custom_source_loaders_are_reported_not_replaced(
     )
 
     assert status == "ERROR"
+
+
+def test_timeouts_stop_processes_started_by_the_tests(
+    project: Path,
+) -> None:
+    # A mutated run starts a background process; it must not outlive the
+    # timed-out probe.
+    pid_file = project / "child.pid"
+    (project / "test_calc.py").write_text(
+        "import pathlib, subprocess, time\nfrom calc import add\n\n\n"
+        "def test_add():\n"
+        "    if add(1, 1) != 2:\n"
+        "        child = subprocess.Popen(['sleep', '60'])\n"
+        f"        pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+        "        time.sleep(60)\n"
+    )
+    mutants_file = write_mutants(
+        project, [{"id": "slow", "module": "calc", "old": "a + b", "new": "a * b"}]
+    )
+    started = time.monotonic()
+
+    baseline, outcomes = probe.run_probes(
+        probe.load_mutants(mutants_file),
+        ["-q", "-s", "-p", "no:cacheprovider", "test_calc.py"],
+        timeout=3,
+    )
+
+    assert time.monotonic() - started < 20
+    assert baseline.status == "PASSED"
+    assert [outcome.status for outcome in outcomes] == ["TIMEOUT"]
+    assert process_stopped(pid_file)
+
+
+def process_stopped(pid_file: Path, within: float = 5.0) -> bool:
+    """Wait until the process whose PID is in pid_file no longer exists."""
+    deadline = time.monotonic() + within
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    pid = int(pid_file.read_text())
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    os.kill(pid, 9)  # do not leak the process if the assertion fails
+    return False

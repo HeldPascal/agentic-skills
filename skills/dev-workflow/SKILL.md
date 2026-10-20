@@ -2,7 +2,7 @@
 name: dev-workflow
 description: Spec-first, multi-agent software development workflow - a coordinator runs requirements discovery, spec author/critic dialogue, independently developed tests and implementation, integration with failure classification, cross-model code and test review, and evidence-based completion. Use when coordinating a non-trivial feature or milestone through several agents (e.g. with Orca), or when you were dispatched as one of its roles (spec author/critic, test author, implementer, code or test reviewer).
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Development workflow

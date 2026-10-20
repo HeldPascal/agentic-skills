@@ -406,13 +406,17 @@ def write_checks(tmp_path: Path, checks: dict) -> Path:
 def test_timeouts_stop_the_command_and_its_children(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    pid_file = tmp_path / "child.pid"
     config = write_checks(
         tmp_path,
         {
             "fast": [
-                # The background child keeps the output pipe open; it must be
-                # stopped too, or waiting for the output would hang.
-                {"name": "hangs", "cmd": "sleep 30 & sleep 30", "timeout": 1},
+                # The background child must not outlive the timed-out check.
+                {
+                    "name": "hangs",
+                    "cmd": f"sleep 60 & echo $! > {pid_file}; sleep 60",
+                    "timeout": 1,
+                },
                 {"name": "quick", "cmd": "echo done"},
             ]
         },
@@ -428,6 +432,7 @@ def test_timeouts_stop_the_command_and_its_children(
     assert code == 1
     assert "TIMEOUT   fast/hangs" in out
     assert "PASS      fast/quick" in out
+    assert process_stopped(pid_file)
 
 
 def test_default_timeout_applies_only_to_checks_without_their_own(
@@ -521,3 +526,19 @@ def test_specs_without_a_version_are_rejected(tmp_path: Path, content: str) -> N
 
     assert snapshot_spec.main([str(spec)]) == 2
     assert list(tmp_path.iterdir()) == [spec]
+
+
+def process_stopped(pid_file: Path, within: float = 5.0) -> bool:
+    """Wait until the process whose PID is in pid_file no longer exists."""
+    deadline = time.monotonic() + within
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    pid = int(pid_file.read_text())
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    os.kill(pid, 9)  # do not leak the process if the assertion fails
+    return False

@@ -12,9 +12,19 @@ the actual code and APIs your package builds on, repository conventions.
 ## Output: the specification
 
 Write it where your assignment says - the working file; the coordinator freezes accepted
-versions as read-only snapshots, which you never edit - with a version and status header and a
-short **change log** at the end (one line per version: version, what changed, why; for coordinator patches also
-the change class). Include what applies:
+versions as read-only snapshots (`scripts/snapshot_spec.py`), which you never edit. The file
+**must start with exactly this YAML front matter** (the snapshot helper reads `version` from it;
+use semantic versions and bump the patch version for every revision):
+
+```yaml
+---
+version: "0.1.0"
+status: draft        # draft while in dialogue, accepted after ACCEPT
+---
+```
+
+End the document with a short **change log** (one line per version: version, what changed, why;
+for coordinator patches also the change class). Include what applies:
 
 - Goal, scope and explicit non-goals.
 - **Public interface:** modules, exact signatures, fields with types and defaults, error and

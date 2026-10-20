@@ -2,7 +2,7 @@
 name: mutation-probing
 description: Find gaps in an existing test suite with a few targeted, hand-picked mutation probes - plausible defects injected one at a time to see whether the tests notice. Works for any language and test runner. Use when reviewing tests or a change, auditing test quality, or checking whether "all green" really means the behavior is verified. Not a full mutation-testing campaign.
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Mutation probing

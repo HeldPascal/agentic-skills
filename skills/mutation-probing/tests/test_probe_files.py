@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import time
@@ -240,8 +241,10 @@ def test_symlinks_leaving_the_repository_are_never_written(
 def test_timeouts_stop_background_processes_of_the_test_command(
     repo: Path, tmp_path: Path
 ) -> None:
+    pid_file = tmp_path / "child.pid"
     (repo / "test.sh").write_text(
-        '. ./add.sh\n[ "$(add 2 3)" = 5 ] || { sleep 30 & sleep 30; }\n'
+        '. ./add.sh\n[ "$(add 2 3)" = 5 ] || '
+        f"{{ sleep 60 & echo $! > {pid_file}; sleep 60; }}\n"
     )
     git(repo, "commit", "-qam", "slow failure")
     started = time.monotonic()
@@ -256,3 +259,20 @@ def test_timeouts_stop_background_processes_of_the_test_command(
     assert time.monotonic() - started < 15
     assert baseline.status == "PASSED"
     assert [outcome.status for outcome in outcomes] == ["TIMEOUT"]
+    assert process_stopped(pid_file)
+
+
+def process_stopped(pid_file: Path, within: float = 5.0) -> bool:
+    """Wait until the process whose PID is in pid_file no longer exists."""
+    deadline = time.monotonic() + within
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    pid = int(pid_file.read_text())
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    os.kill(pid, 9)  # do not leak the process if the assertion fails
+    return False
