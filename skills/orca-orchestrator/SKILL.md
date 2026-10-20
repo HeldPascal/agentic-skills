@@ -1,6 +1,6 @@
 ---
 name: orca-orchestrator
-description: Orchestrate software-engineering work through Orca with spec-first planning, role-separated Junior/Senior execution, independent review, adaptive harness/model/locality routing, bounded autonomous recovery, and minimal project-owner intervention.
+description: DEPRECATED legacy skill - use dev-workflow for coordinating software development. Load this one only when the user explicitly asks for the legacy orca-orchestrator (Junior/Senior routing with persistent state).
 metadata:
   version: "0.8.1"
 ---
