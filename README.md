@@ -27,6 +27,16 @@ Update installed skills with:
 npx skills update
 ```
 
+When you run these commands from inside an Orca Claude session, unset `CLAUDE_CONFIG_DIR`
+(`env -u CLAUDE_CONFIG_DIR npx skills ...`). Otherwise the CLI computes the Claude Code
+symlinks relative to Orca's profile directory, whose `skills` folder is itself a link to
+`~/.claude/skills`, and the links end up broken. Afterwards, verify that every agent sees the
+skills:
+
+```bash
+python3 ~/.agents/skills/dev-workflow/scripts/check_requirements.py --agent claude --agent codex [--orca]
+```
+
 Mutable configuration and learned runtime state deliberately live outside this repository (XDG config/state paths — see each skill's docs), so `npx skills update` can update skill logic without overwriting runtime experience.
 
 ## Development

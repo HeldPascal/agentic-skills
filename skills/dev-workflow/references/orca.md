@@ -94,6 +94,13 @@ normal `worker-start --worktree path:<path>`.
 
 ## Cleanup after a package is accepted
 
-Release its workers, then remove its worker worktrees and their merged branches:
-`orca worktree rm --worktree path:<path>` and `git branch -d <branch>` (`-d` refuses unmerged
-branches - investigate instead of forcing). Keep them only if the user asked to.
+Release its workers, then remove its worker worktrees - only after confirming each is clean
+and its branch is contained in the integration branch
+(`git merge-base --is-ancestor <branch> <integration branch>`). Keep them only if the user asked
+to.
+
+- `orca worktree rm --worktree path:<path>` returns immediately but removes the worktree
+  asynchronously, and deletes its branch as well. Wait until `git worktree list` no longer shows
+  it before reporting the cleanup as done.
+- Only if the branch still exists afterwards, delete it with `git branch -d <branch>` (`-d`
+  refuses unmerged branches - investigate instead of forcing).
