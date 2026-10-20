@@ -11,7 +11,9 @@ the actual code and APIs your package builds on, repository conventions.
 
 ## Output: the specification
 
-Write it where your assignment says, with a version and status header. Include what applies:
+Write it where your assignment says, with a version and status header and a short **change
+log** at the end (one line per version: version, what changed, why; for coordinator patches also
+the change class). Include what applies:
 
 - Goal, scope and explicit non-goals.
 - **Public interface:** modules, exact signatures, fields with types and defaults, error and
@@ -36,7 +38,8 @@ instead of documenting a trade-off that quietly overrides it.
 ## Dialogue (mode `initial`)
 
 1. When the draft is complete, tell the critic it is ready (path, version).
-2. For each critique round: revise, bump the patch version, and answer every finding with
+2. For each critique round: revise, bump the patch version, add a change-log line, and answer
+   every finding with
    `ACCEPTED` (what changed), `REJECTED` (reasoning) or `NEEDS_DECISION`. Engage with
    substance - neither give in to end the discussion nor defend the draft by reflex.
 3. At most three rounds. Unresolved disagreements and `NEEDS_DECISION` items go to the
@@ -54,8 +57,9 @@ report for the coordinator to apply.
 
 ## Mode `revision`
 
-Apply the coordinator's requested change to an accepted spec, bump the version, state the reason
-in the document, and report which acceptance criteria and interfaces changed.
+Apply the coordinator's requested change to an accepted spec, bump the version, add a change-log
+entry with the reason and change class, and report which acceptance criteria and interfaces
+changed.
 
 ## Completion report
 

@@ -27,8 +27,9 @@ they are independent of the project's language:
 - Create a **run directory** outside the repository, e.g.
   `${XDG_STATE_HOME:-~/.local/state}/dev-workflow/<project>/<run-id>/`. It holds the workflow
   documents (task brief, decision record, specifications, worker reports), prompts and contexts,
-  check logs and the observation log. Initialize it as its own git repository so document
-  versions stay traceable. Workers receive absolute paths into it.
+  check logs and the observation log. Workers receive absolute paths into it. Specifications
+  carry their version history themselves (version header and change log); a git repository in
+  the run directory is optional.
 - Write `checks.json` for `run_checks.py` from the commands the repository documents (e.g.
   `fast`: linters and type or compile checks, `full`: the whole test suite) - whatever the
   project's language and tooling are.
@@ -60,7 +61,8 @@ they are independent of the project's language:
    what the user said; consequences that change user-visible behavior go back to the user.
 5. Apply dependency/tooling changes the spec requests, then commit skeleton + dependency changes
    (and the spec, if the project keeps documents in the repository) on the work package's
-   integration branch. That commit is the **baseline** for the package.
+   integration branch. That commit is the **baseline** for the package; record the baseline
+   commit and the spec version it implements in the observation log.
 6. Keep the spec author available for later revisions (section 8); release the critic.
 
 ## 4. Independent development
@@ -86,8 +88,9 @@ Classify every change you make to an accepted spec and log the classification:
 | Semantic change | new requirement, changed error category, new field | targeted delta-review by a fresh spec critic (mode `delta-review`: the change, its reason, the spec, the intent sources); or a revision by the spec author (mode `revision`) followed by that delta-review |
 | Product goal / user intent | default behavior users see, scope | back to the user or to discovery |
 
-After a substantive change, decide which tests, implementations and review conclusions it
-invalidates and revalidate them. Bump the spec version and note the reason.
+Every change, including editorial ones, bumps the spec version and gets a change-log entry in the
+spec (version, class, what, why). After a substantive change, decide which tests,
+implementations and review conclusions it invalidates and revalidate them.
 
 ## 6. Integration and failure classification
 
