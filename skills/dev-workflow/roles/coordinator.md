@@ -16,7 +16,8 @@ they are independent of the project's language:
 | `check_requirements.py` | Setup: the workflow skills (and Orca) are installed for every agent harness you will dispatch to, and the tools exist. |
 | `check_baseline.py` | Before discovery and after creating each worker worktree: HEAD on the intended baseline, clean tree, not based on a stale ref. |
 | `compose_prompt.py` | Render every worker start prompt from a JSON context. Never derive a prompt by editing an earlier one. |
-| `run_checks.py` | Run the project's own verification commands in stages (`fast`, `full`, ...) with logs. |
+| `run_checks.py` | Run the project's own verification commands in stages (`fast`, `full`, ...) with logs and optional timeouts. |
+| `snapshot_spec.py` | Preserve each accepted spec version as an immutable, read-only snapshot file. |
 
 ## 1. Setup
 
@@ -28,11 +29,12 @@ they are independent of the project's language:
   `${XDG_STATE_HOME:-~/.local/state}/dev-workflow/<project>/<run-id>/`. It holds the workflow
   documents (task brief, decision record, specifications, worker reports), prompts and contexts,
   check logs and the observation log. Workers receive absolute paths into it. Specifications
-  carry their version history themselves (version header and change log); a git repository in
-  the run directory is optional.
+  carry their version history themselves (version header and change log), and every accepted
+  version is kept as an immutable snapshot (section 3); a git repository in the run directory
+  is optional.
 - Write `checks.json` for `run_checks.py` from the commands the repository documents (e.g.
   `fast`: linters and type or compile checks, `full`: the whole test suite) - whatever the
-  project's language and tooling are.
+  project's language and tooling are. Give long-running or hang-prone commands a `timeout`.
 
 ## 2. Discovery and decomposition
 
@@ -61,9 +63,11 @@ they are independent of the project's language:
    what the user said; consequences that change user-visible behavior go back to the user.
 5. Apply dependency/tooling changes the spec requests, then commit skeleton + dependency changes
    (and the spec, if the project keeps documents in the repository) on the work package's
-   integration branch. That commit is the **baseline** for the package; record the baseline
-   commit and the spec version it implements in the observation log.
-6. Keep the spec author available for later revisions (section 8); release the critic.
+   integration branch. That commit is the **baseline** for the package.
+6. Freeze the accepted version with `snapshot_spec.py <spec>`. From now on every assignment's
+   `spec` field points to the **snapshot file**, never the working file, and the observation log
+   records the baseline commit together with the snapshot path it implements.
+7. Keep the spec author available for later revisions (section 8); release the critic.
 
 ## 4. Independent development
 
@@ -89,8 +93,9 @@ Classify every change you make to an accepted spec and log the classification:
 | Product goal / user intent | default behavior users see, scope | back to the user or to discovery |
 
 Every change, including editorial ones, bumps the spec version and gets a change-log entry in the
-spec (version, class, what, why). After a substantive change, decide which tests,
-implementations and review conclusions it invalidates and revalidate them.
+spec (version, class, what, why); then snapshot the new version and point later assignments to
+it. After a substantive change, decide which tests, implementations and review conclusions it
+invalidates and revalidate them.
 
 ## 6. Integration and failure classification
 

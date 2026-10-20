@@ -11,8 +11,9 @@ the actual code and APIs your package builds on, repository conventions.
 
 ## Output: the specification
 
-Write it where your assignment says, with a version and status header and a short **change
-log** at the end (one line per version: version, what changed, why; for coordinator patches also
+Write it where your assignment says - the working file; the coordinator freezes accepted
+versions as read-only snapshots, which you never edit - with a version and status header and a
+short **change log** at the end (one line per version: version, what changed, why; for coordinator patches also
 the change class). Include what applies:
 
 - Goal, scope and explicit non-goals.

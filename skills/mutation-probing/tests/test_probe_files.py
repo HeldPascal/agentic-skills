@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,12 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def run(repo: Path, mutants: list[dict[str, str]], tmp_path: Path) -> tuple[int, dict]:
+def run(
+    repo: Path,
+    mutants: list[dict[str, str]],
+    tmp_path: Path,
+    failure_codes: str = "1",
+) -> tuple[int, dict]:
     mutants_file = tmp_path / "mutants.json"
     mutants_file.write_text(json.dumps(mutants))
     result = tmp_path / "result.json"
@@ -49,6 +55,8 @@ def run(repo: Path, mutants: list[dict[str, str]], tmp_path: Path) -> tuple[int,
             str(repo),
             "--json",
             str(result),
+            "--test-failure-codes",
+            failure_codes,
             "--",
             "sh",
             "test.sh",
@@ -174,3 +182,77 @@ def test_invalid_mutant_files_are_rejected(tmp_path: Path, entry: dict) -> None:
 
     with pytest.raises(ValueError):
         probe_files.load_mutants(path)
+
+
+def test_nonzero_exits_count_as_killed_only_for_declared_test_failure_codes(
+    repo: Path, tmp_path: Path
+) -> None:
+    mutants = [
+        {"id": "test-fails", "file": "add.sh", "old": "$1 + $2", "new": "$1 - $2"},
+        # Models a mutation that breaks loading/building: the run aborts with
+        # exit 2 before any test assertion executes.
+        {
+            "id": "build-breaks",
+            "file": "add.sh",
+            "old": "add() {",
+            "new": "exit 2\nadd() {",
+        },
+    ]
+
+    code, result = run(repo, mutants, tmp_path)
+    undeclared_code, undeclared = run(repo, mutants, tmp_path, failure_codes="")
+
+    assert statuses(result) == {"test-fails": "KILLED", "build-breaks": "FAILED"}
+    assert code == 3
+    assert statuses(undeclared) == {"test-fails": "FAILED", "build-breaks": "FAILED"}
+    assert undeclared_code == 3
+    assert any("add failed" in line for line in undeclared["mutants"][0]["output_tail"])
+
+
+@pytest.mark.parametrize("via", ["file-symlink", "directory-symlink"])
+def test_symlinks_leaving_the_repository_are_never_written(
+    repo: Path, tmp_path: Path, via: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.sh").write_text("echo $1 + $2\n")
+    if via == "file-symlink":
+        (repo / "link.sh").symlink_to(outside / "victim.sh")
+        target = "link.sh"
+    else:
+        (repo / "linked").symlink_to(outside, target_is_directory=True)
+        target = "linked/victim.sh"
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "add symlink")
+
+    code, result = run(
+        repo,
+        [{"id": "m", "file": target, "old": "$1 + $2", "new": "$1 - $2"}],
+        tmp_path,
+    )
+
+    assert statuses(result) == {"m": "INVALID"}
+    assert "outside the repository" in result["mutants"][0]["detail"]
+    assert (outside / "victim.sh").read_text() == "echo $1 + $2\n"
+    assert code == 2
+
+
+def test_timeouts_stop_background_processes_of_the_test_command(
+    repo: Path, tmp_path: Path
+) -> None:
+    (repo / "test.sh").write_text(
+        '. ./add.sh\n[ "$(add 2 3)" = 5 ] || { sleep 30 & sleep 30; }\n'
+    )
+    git(repo, "commit", "-qam", "slow failure")
+    started = time.monotonic()
+
+    baseline, outcomes = probe_files.run_probes(
+        [probe_files.Mutant("m", "add.sh", "$1 + $2", "$1 - $2")],
+        "sh test.sh",
+        repo=repo,
+        timeout=1,
+    )
+
+    assert time.monotonic() - started < 15
+    assert baseline.status == "PASSED"
+    assert [outcome.status for outcome in outcomes] == ["TIMEOUT"]

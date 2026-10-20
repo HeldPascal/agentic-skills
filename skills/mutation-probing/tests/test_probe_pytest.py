@@ -185,7 +185,7 @@ def probe_layout(
     return outcomes[0].status
 
 
-def test_deleting_a_used_function_is_killed(
+def test_mutation_that_breaks_collection_is_failed_not_killed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -205,7 +205,7 @@ def test_deleting_a_used_function_is_killed(
         },
     )
 
-    assert status == "KILLED"
+    assert status == "FAILED"
 
 
 def test_mutation_reaches_names_reexported_by_a_package(

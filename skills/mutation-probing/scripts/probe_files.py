@@ -17,17 +17,27 @@ test command runs through the shell in the scratch worktree root; a zero exit
 status means the tests passed. Probes run against the committed state at REF
 (default HEAD) - commit or stash-apply what you want to probe first.
 
-Statuses: KILLED (the test command failed - check the output tail for build
-errors versus test failures), SURVIVED, INVALID (file missing or fragment not
-unique), TIMEOUT. Exit status: 0 all killed, 1 some survived, 2 invalid input,
-a failing baseline, or any INVALID or TIMEOUT result.
+A nonzero exit status does not by itself show that a test detected the
+defect - the mutation may just break the build or test discovery. Where the
+runner uses a distinct exit code for failing tests (e.g. pytest: ``1``), pass
+it with ``--test-failure-codes``. Runners that share one code for build and
+test failures (e.g. cargo, go) cannot be separated by exit code.
+
+Statuses: KILLED (exit code listed in --test-failure-codes), FAILED (any other
+nonzero exit - read the output tail to judge whether tests caught the defect
+or the run broke), SURVIVED, INVALID (file missing, resolving outside the
+repository through a symlink, or fragment not unique), TIMEOUT. Exit status:
+0 all killed, 1 some survived, 2 invalid input, a failing baseline, or any
+INVALID or TIMEOUT result, 3 no survivors but FAILED results needing judgment.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -94,20 +104,26 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _run(command: str, cwd: Path, timeout: float) -> tuple[int | None, list[str]]:
+    # Own process group, so a timeout also stops everything the command started.
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
     try:
-        completed = subprocess.run(
-            command,
-            shell=True,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        output, _ = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None, [f"timed out after {timeout:g}s"]
-    output = completed.stdout + completed.stderr
-    return completed.returncode, [line for line in output.splitlines() if line.strip()]
+        os.killpg(process.pid, signal.SIGKILL)
+        output, _ = process.communicate()
+        output += f"\ntimed out after {timeout:g}s"
+        code = None
+    else:
+        code = process.returncode
+    return code, [line for line in output.splitlines() if line.strip()]
 
 
 def run_probes(
@@ -117,6 +133,7 @@ def run_probes(
     repo: Path,
     ref: str = "HEAD",
     timeout: float = 600.0,
+    test_failure_codes: frozenset[int] = frozenset(),
 ) -> tuple[Outcome, list[Outcome]]:
     """Run the baseline and every mutant sequentially in a scratch worktree."""
     root = Path(_git(repo, "rev-parse", "--show-toplevel"))
@@ -136,14 +153,27 @@ def run_probes(
             if code != 0:
                 return baseline, []
             return baseline, [
-                _probe(mutant, command, worktree, timeout) for mutant in mutants
+                _probe(mutant, command, worktree, timeout, test_failure_codes)
+                for mutant in mutants
             ]
         finally:
             _git(root, "worktree", "remove", "--force", str(worktree))
 
 
-def _probe(mutant: Mutant, command: str, worktree: Path, timeout: float) -> Outcome:
-    target = worktree / mutant.file
+def _probe(
+    mutant: Mutant,
+    command: str,
+    worktree: Path,
+    timeout: float,
+    test_failure_codes: frozenset[int],
+) -> Outcome:
+    # Resolve symlinks (of the file and its parents) and refuse anything that
+    # leaves the scratch worktree, so a probe can never modify outside files.
+    root = worktree.resolve()
+    target = (worktree / mutant.file).resolve()
+    if not target.is_relative_to(root):
+        detail = "file resolves outside the repository (symlink)"
+        return Outcome(mutant.id, "INVALID", detail, mutant.description)
     if not target.is_file():
         return Outcome(mutant.id, "INVALID", "file not found", mutant.description)
     original = target.read_bytes()
@@ -160,8 +190,10 @@ def _probe(mutant: Mutant, command: str, worktree: Path, timeout: float) -> Outc
         target.write_bytes(original)
     if code is None:
         status = "TIMEOUT"
+    elif code == 0:
+        status = "SURVIVED"
     else:
-        status = "SURVIVED" if code == 0 else "KILLED"
+        status = "KILLED" if code in test_failure_codes else "FAILED"
     return Outcome(
         mutant.id,
         status,
@@ -190,9 +222,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ref", default="HEAD")
     parser.add_argument("--json", type=Path, help="write results as JSON")
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--test-failure-codes",
+        default="",
+        help="comma-separated exit codes that mean 'tests failed', e.g. 1",
+    )
     parser.add_argument("command", nargs="+", help="test command after --")
     args = parser.parse_args(argv)
     try:
+        codes = frozenset(
+            int(code) for code in args.test_failure_codes.split(",") if code.strip()
+        )
         mutants = load_mutants(args.mutants)
         baseline, outcomes = run_probes(
             mutants,
@@ -200,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             repo=args.repo,
             ref=args.ref,
             timeout=args.timeout,
+            test_failure_codes=codes,
         )
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"probe_files: {exc}", file=sys.stderr)
@@ -221,7 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     statuses = {outcome.status for outcome in outcomes}
     if statuses & {"INVALID", "TIMEOUT"}:
         return 2
-    return 1 if "SURVIVED" in statuses else 0
+    if "SURVIVED" in statuses:
+        return 1
+    return 3 if "FAILED" in statuses else 0
 
 
 if __name__ == "__main__":

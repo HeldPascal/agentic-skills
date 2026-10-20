@@ -16,11 +16,13 @@ mutants.json is a list of objects with keys ``id``, ``module``, ``old``,
 ``new`` and an optional ``description``. ``old`` must occur exactly once in
 the module source.
 
-Statuses: KILLED, SURVIVED, NOT_EXERCISED (the selected tests never imported
-the target module in-process), INVALID (``old`` not unique), ERROR, TIMEOUT.
-Exit status: 0 when every mutant was killed, 1 when at least one survived and
-none needs attention, 2 for invalid input, a failing baseline, or any
-INVALID, ERROR, NOT_EXERCISED or TIMEOUT result.
+Statuses: KILLED (tests failed), FAILED (tests could not be collected because
+of the mutation - read the output to judge it), SURVIVED, NOT_EXERCISED (the
+selected tests never imported the target module in-process), INVALID (``old``
+not unique), ERROR, TIMEOUT. Exit status: 0 when every mutant was killed, 1
+when at least one survived and none needs attention, 2 for invalid input, a
+failing baseline, or any INVALID, ERROR, NOT_EXERCISED or TIMEOUT result, 3
+when nothing survived but FAILED results need judgment.
 """
 
 from __future__ import annotations
@@ -215,9 +217,11 @@ def classify(result: _ChildResult) -> str:
         return "NOT_EXERCISED"
     if result.returncode == 0:
         return "SURVIVED"
-    # 1: tests failed; 2: collection errors caused by the mutated module.
-    if result.returncode in (1, 2):
+    if result.returncode == 1:
         return "KILLED"
+    # 2: collection errors - the mutation broke loading, not necessarily a test.
+    if result.returncode == 2:
+        return "FAILED"
     return "ERROR"
 
 
@@ -305,7 +309,9 @@ def main(argv: list[str] | None = None) -> int:
     statuses = {outcome.status for outcome in outcomes}
     if statuses & {"INVALID", "ERROR", "TIMEOUT", "NOT_EXERCISED"}:
         return 2
-    return 1 if "SURVIVED" in statuses else 0
+    if "SURVIVED" in statuses:
+        return 1
+    return 3 if "FAILED" in statuses else 0
 
 
 if __name__ == "__main__":

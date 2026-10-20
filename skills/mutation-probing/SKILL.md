@@ -2,7 +2,7 @@
 name: mutation-probing
 description: Find gaps in an existing test suite with a few targeted, hand-picked mutation probes - plausible defects injected one at a time to see whether the tests notice. Works for any language and test runner. Use when reviewing tests or a change, auditing test quality, or checking whether "all green" really means the behavior is verified. Not a full mutation-testing campaign.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Mutation probing
@@ -59,7 +59,7 @@ removed afterwards.
 # mutants.json: [{"id": "M1", "file": "src/runner.ts", "old": "<exact fragment>",
 #                 "new": "<replacement>", "description": "forget instance history"}]
 python3 <skill-dir>/scripts/probe_files.py --mutants mutants.json --json probes.json \
-    -- npm test -- tests/runner
+    --test-failure-codes 1 -- npm test -- tests/runner
 ```
 
 - The fragment must occur exactly once in the file; widen it until it is unique.
@@ -67,10 +67,17 @@ python3 <skill-dir>/scripts/probe_files.py --mutants mutants.json --json probes.
 - The test command runs in a fresh checkout: dependencies or build steps that live outside the
   repository (virtual environments, `node_modules`, build caches) must be created by the
   command or already be shareable. Select a narrow test subset to keep runs fast.
-- Statuses: `KILLED` (command failed - read the output tail: a test failure is the evidence you
-  want, a build error only shows the mutation does not compile), `SURVIVED` (gap), `INVALID`
-  (file missing or fragment not unique), `TIMEOUT`. Exit status: 0 all killed, 1 some survived,
-  2 invalid input, failing baseline, or any `INVALID`/`TIMEOUT`.
+- A nonzero exit is not automatically detection - the mutation may only break the build or
+  test discovery. Where the runner uses a distinct exit code for failing tests, pass it with
+  `--test-failure-codes` (e.g. pytest: `1`; `2` means collection or usage errors). Many runners
+  (e.g. `cargo test`, `go test`) use the same code for build and test failures - then leave it
+  out and judge every `FAILED` result from its output tail.
+- Statuses: `KILLED` (exit code listed as a test failure), `FAILED` (any other nonzero exit -
+  judge from the output tail whether a test caught the defect or the run broke; report it as
+  such, not as a kill), `SURVIVED` (gap), `INVALID` (file missing, resolving outside the
+  repository through a symlink, or fragment not unique), `TIMEOUT`. Exit status: 0 all killed,
+  1 some survived, 2 invalid input, failing baseline, or any `INVALID`/`TIMEOUT`, 3 nothing
+  survived but `FAILED` results need judgment.
 
 **Python with pytest - faster in-process harness.** For Python projects tested with pytest,
 `scripts/probe_pytest.py` applies mutations in memory without a checkout per run. Read

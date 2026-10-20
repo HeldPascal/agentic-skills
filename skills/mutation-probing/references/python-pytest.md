@@ -21,13 +21,15 @@ uv run python <skill-dir>/scripts/probe_pytest.py --mutants mutants.json --json 
 - Run it inside the project's environment (`uv run python`, the virtualenv's `python`, ...) so
   the code under test and pytest import; `--python` names another interpreter.
 - Mutants name a dotted `module` instead of a file; `old` must occur exactly once in it.
-- Statuses: `KILLED` (tests failed, or could not be collected because of the mutation),
+- Statuses: `KILLED` (tests failed), `FAILED` (tests could not be collected because of the
+  mutation - a broken import, not necessarily a detecting test; judge from the output tail),
   `SURVIVED`, `NOT_EXERCISED` (the selected tests never imported the module in-process - wrong
   module name or test selection), `INVALID` (fragment not unique), `ERROR` (mutated source does
   not compile, unsupported loader, broken run), `TIMEOUT`. The JSON output keeps the last lines
   of each run so you can check *why* a probe was killed.
 - Exit status: 0 all killed, 1 some survived, 2 invalid input, failing baseline, or any
-  `INVALID`/`ERROR`/`NOT_EXERCISED`/`TIMEOUT`. A failing baseline stops the run - deselect known
+  `INVALID`/`ERROR`/`NOT_EXERCISED`/`TIMEOUT`, 3 nothing survived but `FAILED` results need
+  judgment. A failing baseline stops the run - deselect known
   failures with `--deselect <node-id>` and say so in the report.
 
 ## Limitations - choose `probe_files.py` instead when they apply

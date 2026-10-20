@@ -1,6 +1,8 @@
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ import check_baseline
 import check_requirements
 import compose_prompt
 import run_checks
+import snapshot_spec
 
 # --- compose_prompt -------------------------------------------------------
 
@@ -392,3 +395,129 @@ def test_unknown_harness_needs_an_explicit_directory(tmp_path: Path) -> None:
 
     assert any("unknown harness" in p for p in without)
     assert not [p for p in with_dir if p.startswith("pi")]
+
+
+def write_checks(tmp_path: Path, checks: dict) -> Path:
+    config = tmp_path / "checks.json"
+    config.write_text(json.dumps(checks))
+    return config
+
+
+def test_timeouts_stop_the_command_and_its_children(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = write_checks(
+        tmp_path,
+        {
+            "fast": [
+                # The background child keeps the output pipe open; it must be
+                # stopped too, or waiting for the output would hang.
+                {"name": "hangs", "cmd": "sleep 30 & sleep 30", "timeout": 1},
+                {"name": "quick", "cmd": "echo done"},
+            ]
+        },
+    )
+    started = time.monotonic()
+
+    code = run_checks.main(
+        ["--config", str(config), "--stage", "fast", "--cwd", str(tmp_path)]
+    )
+
+    out = capsys.readouterr().out
+    assert time.monotonic() - started < 15
+    assert code == 1
+    assert "TIMEOUT   fast/hangs" in out
+    assert "PASS      fast/quick" in out
+
+
+def test_default_timeout_applies_only_to_checks_without_their_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = write_checks(
+        tmp_path,
+        {
+            "fast": [
+                {"name": "own-limit", "cmd": "sleep 2", "timeout": 10},
+                {"name": "default-limit", "cmd": "sleep 2"},
+            ]
+        },
+    )
+
+    code = run_checks.main(
+        [
+            "--config",
+            str(config),
+            "--stage",
+            "fast",
+            "--cwd",
+            str(tmp_path),
+            "--timeout",
+            "1",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "PASS      fast/own-limit" in out
+    assert "TIMEOUT   fast/default-limit" in out
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, "5"])
+def test_invalid_timeouts_are_rejected(tmp_path: Path, timeout: object) -> None:
+    config = write_checks(
+        tmp_path, {"fast": [{"name": "x", "cmd": "true", "timeout": timeout}]}
+    )
+
+    with pytest.raises(ValueError, match="timeout"):
+        run_checks.load_checks(config, ["fast"])
+
+
+# --- snapshot_spec --------------------------------------------------------
+
+
+def write_spec(path: Path, version: str, body: str = "body") -> Path:
+    path.write_text(f'---\nversion: "{version}"\nstatus: accepted\n---\n\n{body}\n')
+    return path
+
+
+def test_snapshot_is_a_read_only_copy_named_by_version(tmp_path: Path) -> None:
+    spec = write_spec(tmp_path / "wp1.md", "0.1.2")
+
+    target = snapshot_spec.snapshot(spec)
+
+    assert target == tmp_path / "wp1.v0.1.2.md"
+    assert target.read_text() == spec.read_text()
+    assert not os.access(target, os.W_OK)
+
+
+def test_snapshots_survive_later_edits_and_are_idempotent(tmp_path: Path) -> None:
+    spec = write_spec(tmp_path / "wp1.md", "0.1.2", "accepted text")
+    first = snapshot_spec.snapshot(spec)
+    assert snapshot_spec.snapshot(spec) == first
+
+    write_spec(spec, "0.1.3", "patched text")
+    second = snapshot_spec.snapshot(spec)
+
+    assert first.read_text().endswith("accepted text\n")
+    assert second == tmp_path / "wp1.v0.1.3.md"
+    assert second.read_text().endswith("patched text\n")
+
+
+def test_changed_content_under_an_existing_version_is_refused(tmp_path: Path) -> None:
+    spec = write_spec(tmp_path / "wp1.md", "0.1.2", "accepted text")
+    snapshot = snapshot_spec.snapshot(spec)
+    write_spec(spec, "0.1.2", "silently edited")
+
+    assert snapshot_spec.main([str(spec)]) == 1
+    assert snapshot.read_text().endswith("accepted text\n")
+
+
+@pytest.mark.parametrize(
+    "content", ["no front matter\n", "---\nstatus: draft\n---\nbody\n"]
+)
+def test_specs_without_a_version_are_rejected(tmp_path: Path, content: str) -> None:
+    spec = tmp_path / "wp1.md"
+    spec.write_text(content)
+
+    assert snapshot_spec.main([str(spec)]) == 2
+    assert list(tmp_path.iterdir()) == [spec]
