@@ -6,20 +6,47 @@ on:
   pull_request:
 
 jobs:
-  pytest:
+  discover:
     runs-on: ubuntu-latest
+    outputs:
+      skills: ${{ steps.find.outputs.skills }}
+      tested: ${{ steps.find.outputs.tested }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install test dependencies
-        run: pip install pytest
-      - name: Run orca-orchestrator tests
-        run: python -m pytest skills/orca-orchestrator/tests -v
+      - name: Find skills and their test suites
+        id: find
+        shell: python
+        run: |
+          import json, os, sys
+          from pathlib import Path
+
+          skills, tested, untested = [], [], []
+          for directory in sorted(Path("skills").iterdir()):
+              if not (directory / "SKILL.md").is_file():
+                  continue
+              skills.append(directory.name)
+              has_tests = any((directory / "tests").glob("test_*.py"))
+              has_scripts = any((directory / "scripts").glob("*.py"))
+              if has_tests:
+                  tested.append(directory.name)
+              elif has_scripts:
+                  untested.append(directory.name)
+          print("skills:", skills)
+          print("tested:", tested)
+          if untested:
+              print(f"::error::skills with scripts but no tests/test_*.py: {untested}")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"skills={json.dumps(skills)}\n")
+              out.write(f"tested={json.dumps(tested)}\n")
 
   validate-skills:
+    needs: discover
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: ${{ fromJSON(needs.discover.outputs.skills) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,5 +54,23 @@ jobs:
           python-version: "3.12"
       - name: Install skills-ref
         run: pip install "git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref"
-      - name: Validate orca-orchestrator SKILL.md
-        run: skills-ref validate skills/orca-orchestrator
+      - name: Validate ${{ matrix.skill }}
+        run: skills-ref validate "skills/${{ matrix.skill }}"
+
+  pytest:
+    needs: discover
+    if: needs.discover.outputs.tested != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: ${{ fromJSON(needs.discover.outputs.tested) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install pytest
+      - name: Test ${{ matrix.skill }}
+        run: python -m pytest "skills/${{ matrix.skill }}/tests" -v

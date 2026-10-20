@@ -18,10 +18,13 @@ This repository contains reusable Agent Skills.
 
 ## Development checks
 
-For changes to helper scripts, run the skill's tests, e.g.:
+CI discovers skills automatically: every `skills/<name>/SKILL.md` is validated with
+`skills-ref`, and every skill with `tests/test_*.py` gets its own pytest job. A skill that ships
+`scripts/*.py` without `tests/test_*.py` fails CI - add tests together with scripts. Run a
+skill's tests locally the same way CI does, one skill per run:
 
 ```bash
-uvx --with pytest --from pytest pytest -q skills/dev-workflow/tests skills/mutation-probing/tests
+uvx --with pytest --from pytest pytest -q skills/<name>/tests
 ```
 
 `orca-orchestrator` is deprecated in favor of `dev-workflow`; its routing/state conventions above
