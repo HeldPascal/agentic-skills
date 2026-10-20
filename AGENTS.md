@@ -18,11 +18,14 @@ This repository contains reusable Agent Skills.
 
 ## Development checks
 
-For changes to `orca-orchestrator` state helpers, run:
+For changes to helper scripts, run the skill's tests, e.g.:
 
 ```bash
-python -m pytest skills/orca-orchestrator/tests
+uvx --with pytest --from pytest pytest -q skills/dev-workflow/tests skills/mutation-probing/tests
 ```
+
+`orca-orchestrator` is deprecated in favor of `dev-workflow`; its routing/state conventions above
+apply only to it and go away with it.
 
 The helper scripts should remain standard-library-only unless a dependency provides a clear benefit that justifies installation/runtime complexity.
 
