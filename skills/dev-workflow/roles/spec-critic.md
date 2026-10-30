@@ -27,8 +27,9 @@ This file only adds the workflow context.
 
 ## Mode `delta-review`
 
-Review one proposed change to an accepted spec: the change, its reason, the current spec and the
-intent sources. Check that it is consistent, does not contradict intent, and say which existing
+Review one proposed change to an accepted spec: the change and its reason, the revised working
+specification (`spec`), the accepted version it started from (`snapshot`) and the intent
+sources. Compare the two files to see exactly what changed. Check that it is consistent, does not contradict intent, and say which existing
 acceptance criteria, tests or implementations it invalidates. Do not reopen the whole spec.
 
 ## Completion report

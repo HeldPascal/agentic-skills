@@ -108,7 +108,13 @@ def test_critic_may_start_before_the_draft_exists(workspace: Path) -> None:
     prompt = compose_prompt.render("spec-critic", validated)
     assert "1. Use the skill `$dev-workflow`" in prompt
     assert "2. Your role uses this skill: use the skill `$spec-critique`." in prompt
-    delta = {**ctx, "mode": "delta-review", "change": "Add X.", "change_reason": "Gap."}
+    delta = {
+        **ctx,
+        "mode": "delta-review",
+        "change": "Add X.",
+        "change_reason": "Gap.",
+        "snapshot": "docs/spec.md",
+    }
     with pytest.raises(compose_prompt.ContextError, match="not a file"):
         compose_prompt.validate("spec-critic", delta)
 
@@ -697,3 +703,83 @@ def test_mode_is_rejected_when_rendering(workspace: Path, tmp_path: Path) -> Non
 
     assert code == 2
     assert not out.exists()
+
+
+def revision_context(workspace: Path, snapshot: Path, **extra: object) -> dict:
+    return {
+        "work_package": "WP1",
+        "agent": "codex",
+        "task": "Apply the classified change to the specification.",
+        "workspace": str(workspace),
+        "mode": "revision",
+        "spec": "docs/spec.md",
+        "snapshot": str(snapshot),
+        "intent": ["docs/brief.md"],
+        "change": "Add a timeout field.",
+        "change_reason": "Review found no timeout contract.",
+        **extra,
+    }
+
+
+@pytest.fixture
+def accepted(workspace: Path, tmp_path: Path) -> Path:
+    """A read-only snapshot of the accepted spec in a run directory."""
+    working = tmp_path / "run" / "specs" / "spec.md"
+    working.parent.mkdir(parents=True)
+    working.write_text('---\nversion: "0.1.0"\nstatus: accepted\n---\n\nbody\n')
+    return snapshot_spec.snapshot(working)
+
+
+def test_revision_edits_the_working_file_and_reads_the_snapshot(
+    workspace: Path, accepted: Path
+) -> None:
+    validated = compose_prompt.validate(
+        "spec-author", revision_context(workspace, accepted)
+    )
+
+    prompt = compose_prompt.render("spec-author", validated)
+
+    working = workspace.resolve() / "docs" / "spec.md"
+    assert f"- Working specification (edit this file): {working}" in prompt
+    assert (
+        f"- Accepted snapshot (read-only reference, never edit): {accepted.resolve()}"
+        in prompt
+    )
+
+
+def test_revision_without_a_snapshot_is_rejected(
+    workspace: Path, accepted: Path
+) -> None:
+    ctx = revision_context(workspace, accepted)
+    del ctx["snapshot"]
+
+    with pytest.raises(compose_prompt.ContextError, match="snapshot"):
+        compose_prompt.validate("spec-author", ctx)
+
+
+def test_a_snapshot_is_never_handed_out_for_editing(
+    workspace: Path, accepted: Path
+) -> None:
+    as_spec = revision_context(workspace, accepted, spec=str(accepted))
+    read_only = workspace / "docs" / "frozen.md"
+    read_only.write_text("frozen")
+    read_only.chmod(0o444)
+    not_writable = revision_context(workspace, accepted, spec="docs/frozen.md")
+
+    with pytest.raises(compose_prompt.ContextError, match="not the snapshot"):
+        compose_prompt.validate("spec-author", as_spec)
+    with pytest.raises(compose_prompt.ContextError, match="not writable"):
+        compose_prompt.validate("spec-author", not_writable)
+
+
+def test_delta_review_needs_the_snapshot_it_started_from(
+    workspace: Path, accepted: Path
+) -> None:
+    ctx = revision_context(workspace, accepted, agent="claude", mode="delta-review")
+
+    validated = compose_prompt.validate("spec-critic", ctx)
+    del ctx["snapshot"]
+
+    assert validated["snapshot"] == str(accepted.resolve())
+    with pytest.raises(compose_prompt.ContextError, match="snapshot"):
+        compose_prompt.validate("spec-critic", ctx)

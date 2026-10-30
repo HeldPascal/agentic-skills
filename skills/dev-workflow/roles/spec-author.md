@@ -68,9 +68,12 @@ report for the coordinator to apply.
 
 ## Mode `revision`
 
-Apply the coordinator's requested change to an accepted spec, bump the version, add a change-log
-entry with the reason and change class, and report which acceptance criteria and interfaces
-changed.
+Your context names two files: `spec` is the **working specification** - edit only this one -
+and `snapshot` is the read-only snapshot of the currently accepted version, your reference for
+what changes. Apply the coordinator's requested change to the working file, bump the version,
+add a change-log entry with the reason and change class, and report which acceptance criteria
+and interfaces changed. Never edit a snapshot; the coordinator snapshots the new version once it
+is accepted.
 
 ## Completion report
 

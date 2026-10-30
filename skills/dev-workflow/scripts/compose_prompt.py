@@ -20,6 +20,9 @@ edited by hand. The result is validated as a whole:
   listed input documents must exist as files (catches stale references);
 - spec roles need intent sources, independent workers need ownership and
   isolation, spec changes need the change and its reason;
+- a spec revision edits the writable working specification (``spec``) and
+  reads the accepted version from the read-only ``snapshot``; downstream
+  roles get the snapshot itself as ``spec``;
 - with a ``baseline``, ``workspace`` must be the root of a git worktree whose
   HEAD is exactly that commit, so a worker cannot start in the wrong place.
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -70,16 +74,17 @@ ROLE_REQUIRED = {
     "reviewer-tests": ("spec", "diff", "report"),
 }
 MODE_REQUIRED = {
-    ("spec-author", "revision"): ("change", "change_reason"),
-    ("spec-critic", "delta-review"): ("change", "change_reason"),
+    ("spec-author", "revision"): ("change", "change_reason", "snapshot"),
+    ("spec-critic", "delta-review"): ("change", "change_reason", "snapshot"),
     ("test-author", "initial"): ("ownership", "isolation"),
     ("test-author", "repair"): ("ownership",),
     ("implementer", "initial"): ("ownership", "isolation"),
     ("implementer", "repair"): ("ownership",),
 }
 
-# key -> (label, kind). kind: "str", "docs" (list of existing files), "path"
-# (file that may not exist yet), "list" (free-form strings), "overrides".
+# key -> (label, kind). kind: "str", "doc" (existing file), "docs" (list of
+# existing files), "path" (file that may not exist yet), "list" (free-form
+# strings), "overrides".
 FIELDS = {
     "work_package": ("Work package", "str"),
     "agent": ("Agent harness", "str"),
@@ -87,6 +92,7 @@ FIELDS = {
     "workspace": ("Workspace", "str"),
     "mode": ("Mode", "str"),
     "spec": ("Specification", "path"),
+    "snapshot": ("Accepted snapshot (read-only reference, never edit)", "doc"),
     "intent": ("Intent sources (task brief, decisions, constraints)", "docs"),
     "references": ("Further references", "docs"),
     "baseline": ("Baseline commit", "str"),
@@ -108,7 +114,7 @@ class ContextError(ValueError):
 
 
 def _check_type(key: str, value: object, kind: str) -> None:
-    if kind in {"str", "path"}:
+    if kind in {"str", "path", "doc"}:
         if not isinstance(value, str) or not value.strip():
             raise ContextError(f"{key} must be a nonempty string")
     elif kind in {"docs", "list"}:
@@ -169,7 +175,7 @@ def validate(role: str, context: dict) -> dict:
         _check_workspace_baseline(workspace, context["baseline"])
     resolved = {**context, "mode": mode, "workspace": str(workspace)}
     for key, (_, kind) in FIELDS.items():
-        if key in context and kind == "path":
+        if key in context and kind in {"path", "doc"}:
             resolved[key] = str(workspace / Path(context[key]).expanduser())
         elif key in context and kind == "docs":
             resolved[key] = [
@@ -179,9 +185,19 @@ def validate(role: str, context: dict) -> dict:
     # Author and critic start together before the draft exists.
     if (role, mode) not in {("spec-author", "initial"), ("spec-critic", "initial")}:
         documents.append(resolved["spec"])
+    if "snapshot" in resolved:
+        documents.append(resolved["snapshot"])
     for document in documents:
         if not Path(document).is_file():
             raise ContextError(f"referenced document is not a file: {document}")
+    if (role, mode) == ("spec-author", "revision"):
+        working = Path(resolved["spec"])
+        if working.resolve() == Path(resolved["snapshot"]).resolve():
+            raise ContextError(
+                "spec must be the working specification, not the snapshot"
+            )
+        if not os.access(working, os.W_OK):
+            raise ContextError(f"working specification {working} is not writable")
     return resolved
 
 
@@ -301,6 +317,8 @@ def render(role: str, context: dict) -> str:
             or key not in context
         ):
             continue
+        if key == "spec" and role == "spec-author":
+            label = "Working specification (edit this file)"
         value = context[key]
         if kind in {"docs", "list"}:
             lines.append(f"- {label}:")

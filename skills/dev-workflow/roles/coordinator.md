@@ -74,9 +74,16 @@ they are independent of the project's language:
 5. Apply dependency/tooling changes the spec requests, then commit skeleton + dependency changes
    (and the spec, if the project keeps documents in the repository) on the work package's
    integration branch. That commit is the **baseline** for the package.
-6. Freeze the accepted version with `snapshot_spec.py <spec>`. From now on every assignment's
-   `spec` field points to the **snapshot file**, never the working file, and the observation log
-   records the baseline commit together with the snapshot path it implements.
+6. Freeze the accepted version with `snapshot_spec.py <spec>`. Two files exist from now on:
+   - the **working specification** - the only file that is ever edited, and only by a spec
+     author (initial dialogue, mode `revision`);
+   - the **snapshot** of each accepted version - read-only, never edited.
+
+   Downstream assignments (test author, implementer, reviewers) point their `spec` field to the
+   current snapshot. Spec revisions get the working file as `spec` and the current snapshot as
+   `snapshot`; a delta-review critic gets the revised working file as `spec` and the snapshot it
+   started from as `snapshot`. The observation log records the baseline commit together with the
+   snapshot path it implements.
 7. Release author and critic. Later revisions go to a fresh spec author briefed with the
    snapshot and the change request (section 8).
 
@@ -103,9 +110,10 @@ Classify every change you make to an accepted spec and log the classification:
 | Semantic change | new requirement, changed error category, new field | targeted delta-review by a fresh spec critic (mode `delta-review`: the change, its reason, the spec, the intent sources); or a revision by the spec author (mode `revision`) followed by that delta-review |
 | Product goal / user intent | default behavior users see, scope | back to the user or to discovery |
 
-Every change, including editorial ones, bumps the spec version and gets a change-log entry in the
-spec (version, class, what, why); then snapshot the new version and point later assignments to
-it. After a substantive change, decide which tests, implementations and review conclusions it
+Every change, including editorial ones, is made in the working specification, bumps its version
+and gets a change-log entry (version, class, what, why). Once the change is accepted (after a
+delta-review where one is required), snapshot the new version and point later assignments to the
+new snapshot; earlier snapshots stay untouched. After a substantive change, decide which tests, implementations and review conclusions it
 invalidates and revalidate them.
 
 ## 6. Integration and failure classification
