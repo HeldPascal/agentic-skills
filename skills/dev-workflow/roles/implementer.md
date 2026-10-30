@@ -19,7 +19,8 @@ Implement a work package against its specification and baseline skeleton.
 
 ## Mode `repair`
 
-You now see tests and review reports. Fix the classified implementation defects and address the
+You now see tests and review reports. If you are a fresh repair worker, read the previous
+implementer's report (named in your context) before changing anything. Fix the classified implementation defects and address the
 review findings assigned to you. If a test looks wrong per the spec, do not edit it: report the
 test and your reasoning. Keep the public interface unchanged unless the spec revision says
 otherwise.

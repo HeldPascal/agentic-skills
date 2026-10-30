@@ -19,12 +19,28 @@ import snapshot_spec
 # --- compose_prompt -------------------------------------------------------
 
 
+def init_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    sh(path, "init", "-q", "-b", "main")
+    for key, value in {
+        "user.name": "t",
+        "user.email": "t@example.org",
+        "commit.gpgsign": "false",
+    }.items():
+        sh(path, "config", key, value)
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "brief.md").write_text("brief")
-    (tmp_path / "docs" / "spec.md").write_text("spec")
-    return tmp_path
+    """A git worktree root with committed documents (HEAD is the baseline)."""
+    root = tmp_path / "ws"
+    init_repo(root)
+    (root / "docs").mkdir()
+    (root / "docs" / "brief.md").write_text("brief")
+    (root / "docs" / "spec.md").write_text("spec")
+    sh(root, "add", ".")
+    sh(root, "commit", "-q", "-m", "baseline")
+    return root
 
 
 def context(workspace: Path, **extra: object) -> dict:
@@ -34,7 +50,7 @@ def context(workspace: Path, **extra: object) -> dict:
         "task": "Write the authoritative tests for WP1.",
         "workspace": str(workspace),
         "spec": "docs/spec.md",
-        "baseline": "abc123",
+        "baseline": sh(workspace, "rev-parse", "HEAD"),
         "report": "/tmp/report.md",
         "ownership": ["tests/"],
         "isolation": ["../wp1-impl", "branch wp1-impl"],
@@ -58,7 +74,7 @@ def test_prompt_points_at_skill_files_and_lists_context(workspace: Path) -> None
     assert "`roles/test-author.md` (your role; mode: initial)" in prompt
     assert "do not recreate it from memory" in prompt
     assert "Write the authoritative tests for WP1." in prompt
-    assert "- Baseline commit: abc123" in prompt
+    assert f"- Baseline commit: {sh(workspace, 'rev-parse', 'HEAD')}" in prompt
     assert f"- Specification: {workspace.resolve() / 'docs' / 'spec.md'}" in prompt
     assert "  - ../wp1-impl" in prompt
     assert "1. Skip slow tests. (reason: CI limit)" in prompt
@@ -156,6 +172,112 @@ def test_main_writes_prompt_file(workspace: Path, tmp_path: Path) -> None:
 
     assert code == 0
     assert out.read_text().startswith("# Test Author - WP1")
+
+
+def test_main_reports_the_workspace_to_dispatch_into(
+    workspace: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ctx_file = tmp_path / "ctx.json"
+    ctx_file.write_text(json.dumps(context(workspace)))
+    out = tmp_path / "prompt.md"
+
+    compose_prompt.main(
+        ["--role", "test-author", "--context", str(ctx_file), "--out", str(out)]
+    )
+
+    assert json.loads(capsys.readouterr().out) == {
+        "prompt": str(out.resolve()),
+        "workspace": str(workspace.resolve()),
+        "role": "test-author",
+        "mode": "initial",
+    }
+
+
+def test_workspace_must_sit_exactly_on_the_baseline(workspace: Path) -> None:
+    old = sh(workspace, "rev-parse", "HEAD")
+    commit(workspace, "later.txt")
+
+    with pytest.raises(compose_prompt.ContextError, match="does not match baseline"):
+        compose_prompt.validate("test-author", context(workspace, baseline=old))
+
+
+def test_workspace_must_be_the_worktree_root(workspace: Path) -> None:
+    ctx = {
+        **context(workspace),
+        "workspace": str(workspace / "docs"),
+        "spec": "spec.md",
+    }
+
+    with pytest.raises(compose_prompt.ContextError, match="not the root"):
+        compose_prompt.validate("test-author", ctx)
+
+
+def test_set_overrides_fields_and_revalidates(workspace: Path, tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    init_repo(other)
+    commit(other, "x.txt")
+    base = context(workspace)
+    ctx_file = tmp_path / "ctx.json"
+    ctx_file.write_text(json.dumps(base))
+    out = tmp_path / "repair.md"
+
+    code = compose_prompt.main(
+        [
+            "--role",
+            "test-author",
+            "--context",
+            str(ctx_file),
+            "--set",
+            "mode=repair",
+            "--set",
+            'ownership=["tests/", "fixtures/"]',
+            "--out",
+            str(out),
+        ]
+    )
+    prompt = out.read_text()
+    moved = compose_prompt.main(
+        [
+            "--role",
+            "test-author",
+            "--context",
+            str(ctx_file),
+            "--set",
+            f"workspace={other}",
+            "--out",
+            str(tmp_path / "moved.md"),
+        ]
+    )
+
+    assert code == 0
+    assert "(dev-workflow, mode: repair)" in prompt
+    assert "  - fixtures/" in prompt
+    assert moved == 2  # the old baseline does not exist in the other worktree
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    ["spce=x", "noequals", "ownership=tests/"],
+    ids=["unknown-key", "no-value", "list-not-json"],
+)
+def test_invalid_set_assignments_are_rejected(workspace: Path, assignment: str) -> None:
+    with pytest.raises(compose_prompt.ContextError):
+        compose_prompt.apply_sets(context(workspace), [assignment])
+
+
+def test_describe_lists_required_and_optional_fields() -> None:
+    text = compose_prompt.describe("reviewer-code")
+    required = text.split("required:")[1].split("optional:")[0]
+    optional = text.split("optional:")[1]
+
+    for key in ("task", "workspace", "agent", "spec", "diff", "report"):
+        assert f"  {key} " in required
+    assert "  baseline " in optional
+    assert "isolation" in compose_prompt.describe("implementer").split("optional:")[0]
+    assert (
+        "isolation"
+        not in compose_prompt.describe("implementer", "repair").split("optional:")[0]
+    )
 
 
 # --- check_baseline -------------------------------------------------------

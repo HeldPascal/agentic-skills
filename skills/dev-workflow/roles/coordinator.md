@@ -15,7 +15,7 @@ they are independent of the project's language:
 | --- | --- |
 | `check_requirements.py` | Setup: the workflow skills (and Orca) are installed for every agent harness you will dispatch to, and the tools exist. |
 | `check_baseline.py` | Before discovery and after creating each worker worktree: HEAD on the intended baseline, clean tree, not based on a stale ref. |
-| `compose_prompt.py` | Render every worker start prompt from a JSON context. Never derive a prompt by editing an earlier one. |
+| `compose_prompt.py` | Render every worker start prompt from a JSON context (`--describe --role <role> [--mode <mode>]` lists the fields; `--set KEY=VALUE` varies one dispatch). Never derive a prompt or context by editing an earlier one by hand. It verifies that a worker's workspace sits exactly on its baseline. |
 | `run_checks.py` | Run the project's own verification commands in stages (`fast`, `full`, ...) with logs and optional timeouts. |
 | `snapshot_spec.py` | Preserve each accepted spec version as an immutable, read-only snapshot file. |
 
@@ -24,7 +24,14 @@ they are independent of the project's language:
 - Run `check_requirements.py --agent <each harness you will use> [--orca]`. Install whatever it
   reports missing (or ask the user to) before continuing; do not work around it.
 - Run `check_baseline.py --worktree . --base <main branch>` on your own workspace. If your branch
-  lacks commits of the local main branch, sort that out before reading the plans.
+  lacks commits of the local main branch, sort that out before reading the plans. Your current
+  feature branch serves as the **integration branch**; a separate one is not required.
+- **Models and effort:** decide them yourself per role from the models available in the
+  harnesses, the role's needs (strong reasoning for spec author, critic and reviewers; an
+  economical model is often enough for implementation from a precise spec), the task's
+  complexity, cost, and any preferences the user stated. Keep author and judge in different
+  model families. Ask the user only when a real constraint or trade-off needs their decision.
+  Record requested and effective model/effort for every dispatch (`references/orca.md`).
 - Create a **run directory** outside the repository, e.g.
   `${XDG_STATE_HOME:-~/.local/state}/dev-workflow/<project>/<run-id>/`. It holds the workflow
   documents (task brief, decision record, specifications, worker reports), prompts and contexts,
@@ -40,9 +47,11 @@ they are independent of the project's language:
 
 - Run the `requirements-discovery` skill: Task Brief plus Decision Record. These are the intent
   sources every spec dispatch receives.
-- Workflow documents live in the run directory by default. Ask the user during discovery
-  whether the project wants them in the repository (and where); if so, commit them there
-  instead. Never commit them to the repository without that agreement.
+- Workflow documents live in the run directory by default. Ask about putting them into the
+  repository only when it matters - the repository keeps such documents by convention, the user
+  stated a preference, or the documents must be shared with others; never commit them without
+  that agreement. Tell the user where the documents are (in the discovery summary and the final
+  report).
 - Decompose into work packages when it improves focus, independent verification or interface
   clarity; run them sequentially. If several packages share interfaces, start with an
   architecture-only package (spec dialogue, no code) that fixes module boundaries and
@@ -67,7 +76,8 @@ they are independent of the project's language:
 6. Freeze the accepted version with `snapshot_spec.py <spec>`. From now on every assignment's
    `spec` field points to the **snapshot file**, never the working file, and the observation log
    records the baseline commit together with the snapshot path it implements.
-7. Keep the spec author available for later revisions (section 8); release the critic.
+7. Release author and critic. Later revisions go to a fresh spec author briefed with the
+   snapshot and the change request (section 8).
 
 ## 4. Independent development
 
@@ -79,7 +89,7 @@ they are independent of the project's language:
   spec lets an economical model implement; the test author benefits from a thorough one.
 - Answer questions. If an answer clarifies the spec, send the clarification to **both** (never
   the other's work) and record it; substantive clarifications become a spec patch (section 5).
-- When they finish, keep both workers available for repairs (section 8).
+- Release both when they finish; repairs are briefed from their reports (section 8).
 
 ## 5. Spec changes by the coordinator
 
@@ -117,33 +127,44 @@ invalidates and revalidate them.
 
 - Dispatch a Code Reviewer and a Test Reviewer in parallel, as **fresh** workers, read-only on
   the integrated state. Each comes from a **different model family than the author of what it
-  reviews** (you know who wrote what; record it). For a small package one reviewer may take both
-  roles.
+  reviews** (you know who wrote what; record it).
+- **One reviewer for both roles** is an optimization for small packages, not the default. It is
+  allowed only if that reviewer's model family differs from the authors of *both* the
+  implementation and the tests - i.e. both were written by one family and the reviewer comes
+  from another, or a third family is available. If tests and implementation come from two
+  different families and only those two are available, use two reviewers; do not weaken the
+  cross-model independence to save a dispatch. Record the choice and its reason.
 - Tell reviewers which failures are already triaged so they do not re-report them.
 - Expect and value mutation probes: surviving probes are the strongest evidence of gaps.
 
 ## 8. Repair
 
-Worker policy: **authors continue, judges are fresh.** The implementer, test author and spec
-author keep their context for repairs and revisions - independence has ended with integration,
-and their context makes repairs cheaper. Reviewers and critics are always new workers. If a
-repair by a continuing worker fails, start the next attempt with a fresh worker, so it does not
-anchor on (or defend) the failed approach.
+Worker policy: **repairs and revisions go to a fresh worker** of the same model family as the
+original author, unless that author's attempt failed (then use another family or more effort).
+Brief it through its context with the original worker's report, the spec snapshot, the
+integrated state and the findings assigned to it. Continuing the original worker's terminal is
+an optimization only for an immediate follow-up while its agent is still live - orchestrators do
+not guarantee that a finished worker can be resumed later (`references/orca.md`). Reviewers and
+critics are always fresh.
 
 1. Triage every finding: class, owner, and whether it needs a spec patch first. Spec feedback
    without current impact goes into the observation log instead of being fixed now.
 2. Apply spec patches (classified, section 5).
-3. Bring each repair worker's worktree to the integration state: a continuing worker's
-   worktree is fast-forwarded to the integration branch (its own branch is part of it, so this
-   is always a fast-forward); a fresh worker gets a new worktree from the integration branch.
+3. Give each repair worker a worktree on the integration state: a fresh worker gets a new
+   worktree from the integration branch; a continuing worker's worktree is fast-forwarded to it
+   (its own branch is part of it, so this is always a fast-forward). Its context names the
+   integration commit as `baseline`.
 4. Dispatch implementer and test-author repairs in parallel (mode `repair`) with the review
    reports. New tests may be red against the old implementation until both merge.
 5. Merge, run `full` checks, then re-run the reviewers' surviving probes against the merged
    state (`mutation-probing` skill) and record the results - repair workers may not have been
    able to, because their baseline was deliberately red. A further review is needed only when
    repairs were broad or not backed by deterministic evidence; otherwise accept.
-6. **Clean up the accepted package:** release its workers and remove its worker worktrees and
-   branches (their commits are in the integration branch), unless the user asked to keep them.
+6. **Clean up the accepted package:** no worker left to release, no task of this run left open
+   (close abandoned ones as cancelled with a reason; never touch tasks of other runs or
+   workflows), and its worker worktrees and branches removed (their commits are in the
+   integration branch) unless the user asked to keep them. `references/orca.md` has the
+   commands.
 
 **Progress checkpoint:** after about four unsuccessful attempts on the same issue, reassess.
 Continue only with new evidence or a different approach (write down why); otherwise escalate:
@@ -162,8 +183,8 @@ autonomously unless the user asked for checkpoints.
 Accept the overall task only with evidence. The final report states: implemented spec versions,
 acceptance criteria and how each is demonstrated, checks actually run and their results,
 important review findings and their resolution, known limitations and risks, the git state
-(branch, commits, unmerged, worktrees removed), where the workflow documents are, and anything
-the user must do. Verify the parent task end-to-end, not only the packages.
+(branch, commits, unmerged, worktrees removed), the orchestration state (no open workers or
+tasks), where the workflow documents are, and anything the user must do. Verify the parent task end-to-end, not only the packages.
 
 ## 11. Observations
 

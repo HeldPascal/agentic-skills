@@ -2,7 +2,7 @@
 name: requirements-discovery
 description: Turn a vague feature idea, bug report or development goal into a clear, testable task through focused interactive questions - producing a Task Brief and a lightweight Decision Record. Use at the start of non-trivial development work when requirements, scope or important trade-offs are not yet clear, before writing specifications or code.
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # Requirements discovery
@@ -35,10 +35,11 @@ Before asking anything:
 
 ## 3. Produce the outputs
 
-Write them to the agreed location. Default to a private working directory outside the
-repository; put them into the repository only if the user or project conventions want that -
-some projects must not receive such documents. Ask when unclear. One file with two sections is
-fine.
+Write them to a private working directory outside the repository by default and tell the user
+where they are. Put them into the repository only if the user or project conventions want that
+- some projects must not receive such documents; ask only when this genuinely matters (the
+repository keeps such documents, the user stated a preference, or the documents must be shared).
+One file with two sections is fine.
 
 **Task Brief**
 

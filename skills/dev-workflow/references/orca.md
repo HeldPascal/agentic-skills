@@ -3,43 +3,54 @@
 Coordinator-only reference. Orca owns dispatching, messaging, waiting and worker lifecycle; this
 file only maps the workflow onto Orca's mechanisms. Before the first command, resolve the Orca
 executable as the installed `orchestration` skill instructs, then load its version-matched guide
-(`<orca> skills get orchestration`, plus the `coordinator-loop`, `placement-and-remote` and
-`messaging-and-gates` references). Where the guide differs from this file, the guide wins.
-Examples below write `orca`. Pass `--model`/`--effort` only where the guide and the user's
-setup allow launch preferences, and compare `launch.requested` with `launch.effective`.
+(`<orca> skills get orchestration`, plus the `coordinator-loop`, `placement-and-remote`,
+`messaging-and-gates` and, when something fails, `recovery-and-cleanup` references). Where the
+guide differs from this file, the guide wins. Examples below write `orca`.
 
 ## One run per task
 
 `orca orchestration run-create --objective "<task>" --json` once; all dispatches belong to it.
+Task and worker mutations only work in the run your session is bound to
+(`orca orchestration run-use --id <run>` switches). Record every task and dispatch id you create.
 
-## Shared-workspace workers (spec author, spec critic, reviewers)
+## Launch preferences (model, effort)
 
-They work in the coordinator's workspace (the critic and reviewers read-only):
+`worker-start ... --agent <claude|codex|...> [--model <id> [--effort <level>]]`. Model ids are
+the harness's own ids; `--effort` needs `--model`; neither combines with `--terminal`. Omit both
+to use the harness default. Every start receipt has `launch.requested` and `launch.effective` -
+record both in the observation log; effective `null` means the harness default applied. If a
+requested model is rejected or not effective, record that and decide whether the default is
+acceptable for the role before continuing.
 
-1. Write the context JSON with `"workspace"` = your workspace and `"agent"` = the harness you
-   will start (`claude`, `codex`, or `other`), then render the prompt:
-   `python3 <skill-dir>/scripts/compose_prompt.py --role <role> --context <ctx.json> --out <prompt.md>`
-2. `orca orchestration worker-start --spec "$(cat <prompt.md>)" --task-title "<wp> <role>"
-   --worktree current --agent <agent> [--model <id> --effort <level>] --json`
+## Dispatching a worker
 
-## Independent workers (test author, implementer)
+Always dispatch with `worker-start --spec`, which creates the task and its dispatch in one call
+(no separate `task-create`, so no orphaned tasks):
 
-Create and verify the worktrees **before** any worker starts, so prompts carry the real paths
-and nothing runs on a wrong base:
-
-1. Create both worktrees without an agent:
-   `orca worktree create --name <wp>-tests --base-branch <integration branch>
-   --parent-worktree <selector of your worktree> --json` (same for `<wp>-impl`); take the paths from the
-   output.
-2. `python3 <skill-dir>/scripts/check_baseline.py --worktree <path> --expect <baseline commit>`
-   for each. Fix any problem before continuing.
-3. Render each prompt with its own path as `workspace`, its sibling's path and branch in
-   `isolation`, and its writable paths in `ownership`.
-4. Start each worker on its existing worktree:
+1. Render the prompt: `python3 <skill-dir>/scripts/compose_prompt.py --role <role> --context <ctx.json> [--set KEY=VALUE ...] --out <prompt.md>`.
+   It prints JSON with `prompt` and the validated `workspace`.
+2. Start the worker **in exactly that workspace**:
    `orca orchestration worker-start --spec "$(cat <prompt.md>)" --task-title "<wp> <role>"
-   --worktree path:<path> --agent <agent> [--model <id> --effort <level>] --json`
+   --worktree path:<workspace> --agent <agent> [--model <id> --effort <level>] --json`
+   (`--worktree current` is equivalent when the workspace is your own).
+3. Record task id, dispatch id, role, requested/effective model and workspace.
 
-Record dispatch id, role, effective model and worktree in the observation log.
+If `worker-start` exits non-zero, do not relaunch blindly: read the receipt's `failedStage` and
+`residualResources` and follow the guide's recovery reference. A task it created but never
+started is closed as described under *Cleanup*.
+
+**Shared workspace** - spec author, spec critic and reviewers work in your integration
+worktree (critic and reviewers read-only).
+
+**Independent workers** - create and verify their worktrees before anyone starts:
+
+1. `orca worktree create --name <wp>-tests --base-branch <integration branch>
+   --parent-worktree <selector of your worktree> --json` (same for `<wp>-impl`), without
+   `--agent`; take the paths from the output.
+2. Render each prompt with its own path as `workspace`, the integration commit as `baseline`,
+   its sibling's path and branch in `isolation` and its writable paths in `ownership`.
+   `compose_prompt.py` refuses the context unless the workspace is the worktree root and sits
+   exactly on the baseline.
 
 ## Author/critic dialogue
 
@@ -54,6 +65,10 @@ their own terminal handle.
   --timeout-ms <ms> --json`, keeping the timeout below your shell's command timeout. A timeout
   is a checkpoint, not a failure; after several empty waits inspect
   `orca orchestration worker-list --run <run> --json`.
+- `check --wait` writes JSON keepalive lines to stderr every 15 s. Filter only those and keep
+  real diagnostics (works in sh, bash and zsh):
+  `{ orca orchestration check --wait ... 2>&1 1>&3 | grep -v '"_keepalive"' >&2; } 3>&1`.
+  The exit status is then grep's; rely on the JSON on stdout (`ok`, `timedOut`, `messages`).
 - A delivery is the whole FIFO batch (including heartbeats and status messages) and is replayed
   until acknowledged: process every message, then `check --ack <delivery id>`. Heartbeat-only
   batches need an ack too.
@@ -62,45 +77,47 @@ their own terminal handle.
 
 ## Settling workers
 
-On every `worker_done`, check outcome, files and report path against the assignment, then decide
-the terminal's next owner before acknowledging:
+On every `worker_done`, check outcome, files and report path against the assignment, then
+**release** the worker (`orca orchestration worker-release --dispatch <id>`) before
+acknowledging - unless you dispatch the same worker's immediate next step right now (below).
+Do not retain workers for later phases: `worker-retain` is for user-requested debugging, and a
+retained terminal is not guaranteed to still run its agent when you come back.
 
-- **Authors** (spec author after the spec phase, test author and implementer after initial
-  development): keep them for later revision or repair with
-  `orca orchestration worker-retain --dispatch <id>` - this is the workflow's policy, so it
-  counts as requested retention.
-- **Judges** (spec critic, reviewers) and authors whose package is accepted:
-  `orca orchestration worker-release --dispatch <id>`.
+## Continuing a worker or starting a fresh one (revision, repair)
 
-Then `check --ack <delivery id>`. When a package is accepted,
-`orca orchestration worker-list --run <run> --terminal-state reclaimable --json` must be empty.
+The default is a **fresh worker** of the same model family as the original author: create its
+worktree from the integration branch (as for independent workers, name it e.g.
+`<wp>-impl-repair`), and brief it through the context with the original worker's report, the
+spec snapshot, the assigned findings and the integration commit as `baseline`.
 
-## Continuing a worker (revision, repair)
-
-Fast-forward its worktree to the integration branch
-(`git -C <path> merge --ff-only <integration branch>`), render the prompt in mode `repair` (or
-`revision`), create a task for it and dispatch it to the same terminal:
+Continue the same terminal only for an immediate follow-up within the same phase, and only if
+`orca orchestration worker-list --run <run> --json` shows its `projection.liveness.verdict` as
+`live`:
 
 ```
-orca orchestration task-create --spec "$(cat <prompt.md>)" --task-title "<wp> <role> repair" --json
-orca orchestration worker-start --task <task id> --terminal <worker's terminal handle> \
-  --worktree path:<path> --json
+orca orchestration worker-start --spec "$(cat <prompt.md>)" --task-title "<wp> <role> repair" \
+  --terminal <worker's terminal handle> --worktree path:<its worktree> --json
 ```
 
 `worker-show --dispatch <id>` gives the terminal handle; model and effort stay as launched.
-A **fresh** repair worker instead gets a new worktree from the integration branch
-(`orca worktree create --name <wp>-<role>-repair --base-branch <integration branch> ...`) and a
-normal `worker-start --worktree path:<path>`.
+If this start fails, fall back to a fresh worker - never retry the same terminal blindly.
 
-## Cleanup after a package is accepted
+## Cleanup
 
-Release its workers, then remove its worker worktrees - only after confirming each is clean
-and its branch is contained in the integration branch
-(`git merge-base --is-ancestor <branch> <integration branch>`). Keep them only if the user asked
-to.
+After a package is accepted, and once more before the final report:
 
-- `orca worktree rm --worktree path:<path>` returns immediately but removes the worktree
-  asynchronously, and deletes its branch as well. Wait until `git worktree list` no longer shows
-  it before reporting the cleanup as done.
-- Only if the branch still exists afterwards, delete it with `git branch -d <branch>` (`-d`
-  refuses unmerged branches - investigate instead of forcing).
+1. **Workers:** `orca orchestration worker-list --run <run> --terminal-state reclaimable --json`
+   must be empty; release what it lists after checking each one's state (use the row's
+   `projection.nextAction`).
+2. **Tasks:** `orca orchestration task-list --run <run> --json` - every task you created must be
+   `completed` or `failed`. Close a task that was never started or was abandoned with
+   `orca orchestration task-update --id <task> --status failed --result "cancelled: <why>; superseded by <task>"`
+   (stop or abandon its worker first if it has one). Only touch tasks of your own run whose ids
+   you recorded; never delete or close tasks of other runs or workflows.
+3. **Worktrees:** remove worker worktrees only after confirming each is clean and its branch is
+   contained in the integration branch (`git merge-base --is-ancestor <branch> <integration
+   branch>`), unless the user asked to keep them. `orca worktree rm --worktree path:<path>`
+   returns immediately but removes the worktree asynchronously and deletes its branch as well;
+   wait until `git worktree list` no longer shows it. Only if the branch still exists
+   afterwards, delete it with `git branch -d <branch>` (`-d` refuses unmerged branches -
+   investigate instead of forcing).

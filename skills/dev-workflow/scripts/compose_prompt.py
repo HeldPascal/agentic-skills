@@ -7,20 +7,31 @@ rules and its role file (absolute paths of this skill installation), lists the
 task context, and states coordinator overrides together with their reasons.
 
 Usage:
-    compose_prompt.py --role test-author --context ctx.json --out prompt.md
+    compose_prompt.py --describe --role ROLE [--mode MODE]
+    compose_prompt.py --role ROLE --context ctx.json [--set KEY=VALUE ...]
+                      --out prompt.md
 
-The context file is a JSON object; see ``FIELDS`` for the accepted keys.
-Relative paths in the context are resolved against ``workspace`` and rendered
-as absolute paths; listed input documents must exist as files, which catches
-stale references before dispatch. Mode-specific requirements make the
-safeguards explicit: spec roles need intent sources, independent workers need
-ownership and isolation, and spec changes need the change and its reason.
+``--describe`` lists the required and optional context fields of a role and
+mode. The context file is a JSON object; ``--set`` overrides single fields for
+one dispatch (list fields take a JSON list), so contexts never need to be
+edited by hand. The result is validated as a whole:
+
+- relative paths are resolved against ``workspace`` and rendered absolute;
+  listed input documents must exist as files (catches stale references);
+- spec roles need intent sources, independent workers need ownership and
+  isolation, spec changes need the change and its reason;
+- with a ``baseline``, ``workspace`` must be the root of a git worktree whose
+  HEAD is exactly that commit, so a worker cannot start in the wrong place.
+
+On success the script prints one JSON line with the prompt path and the
+resolved workspace; dispatch the worker into exactly that workspace.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -154,6 +165,8 @@ def validate(role: str, context: dict) -> dict:
     workspace = Path(context["workspace"]).expanduser().resolve()
     if not workspace.is_dir():
         raise ContextError(f"workspace {workspace} is not a directory")
+    if "baseline" in context:
+        _check_workspace_baseline(workspace, context["baseline"])
     resolved = {**context, "mode": mode, "workspace": str(workspace)}
     for key, (_, kind) in FIELDS.items():
         if key in context and kind == "path":
@@ -170,6 +183,75 @@ def validate(role: str, context: dict) -> dict:
         if not Path(document).is_file():
             raise ContextError(f"referenced document is not a file: {document}")
     return resolved
+
+
+def _git(workspace: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(workspace), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise ContextError(
+            f"git {' '.join(args)} failed in {workspace}: {completed.stderr.strip()}"
+        )
+    return completed.stdout.strip()
+
+
+def _check_workspace_baseline(workspace: Path, baseline: str) -> None:
+    top = Path(_git(workspace, "rev-parse", "--show-toplevel")).resolve()
+    if top != workspace:
+        raise ContextError(f"workspace {workspace} is not the root of a git worktree")
+    head = _git(workspace, "rev-parse", "HEAD")
+    expected = _git(workspace, "rev-parse", "--verify", f"{baseline}^{{commit}}")
+    if head != expected:
+        raise ContextError(
+            f"workspace HEAD {head[:12]} does not match baseline {baseline} "
+            f"({expected[:12]})"
+        )
+
+
+def apply_sets(context: dict, assignments: list[str]) -> dict:
+    """Return a copy of context with KEY=VALUE assignments applied."""
+    updated = dict(context)
+    for assignment in assignments:
+        key, sep, value = assignment.partition("=")
+        if not sep or key not in FIELDS:
+            raise ContextError(
+                f"--set expects KEY=VALUE with a known key: {assignment!r}"
+            )
+        if FIELDS[key][1] in {"docs", "list", "overrides"}:
+            try:
+                updated[key] = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ContextError(f"--set {key} needs a JSON list: {exc}") from exc
+        else:
+            updated[key] = value
+    return updated
+
+
+def describe(role: str, mode: str | None = None) -> str:
+    """Describe the context fields a role (and mode) requires and accepts."""
+    if role not in ROLES:
+        raise ContextError(f"unknown role {role!r}; choose from {sorted(ROLES)}")
+    modes = ROLES[role][1]
+    mode = mode or modes[0]
+    if mode not in modes:
+        raise ContextError(f"{role} mode must be one of {list(modes)}")
+    required = (
+        COMMON_REQUIRED + ROLE_REQUIRED[role] + MODE_REQUIRED.get((role, mode), ())
+    )
+    lines = [f"{role} (mode {mode}; modes: {', '.join(modes)})", "required:"]
+    lines += [f"  {key:14} {FIELDS[key][1]:9} {FIELDS[key][0]}" for key in required]
+    lines.append("optional:")
+    lines += [
+        f"  {key:14} {kind:9} {label}"
+        for key, (label, kind) in FIELDS.items()
+        if key not in required
+    ]
+    lines.append(f"agent: one of {[*SKILL_SYNTAX, 'other']}")
+    return "\n".join(lines)
 
 
 def _load(name: str, agent: str) -> str:
@@ -249,18 +331,37 @@ def render(role: str, context: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--role", required=True, choices=sorted(ROLES))
-    parser.add_argument("--context", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--describe", action="store_true")
+    parser.add_argument("--mode", help="with --describe: the mode to describe")
+    parser.add_argument("--context", type=Path)
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
+    parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.describe:
+            print(describe(args.role, args.mode))
+            return 0
+        if args.context is None or args.out is None:
+            raise ContextError("--context and --out are required (or use --describe)")
         context = json.loads(args.context.read_text(encoding="utf-8"))
-        validated = validate(args.role, context)
+        if not isinstance(context, dict):
+            raise ContextError("context must be a JSON object")
+        validated = validate(args.role, apply_sets(context, args.set))
     except (OSError, json.JSONDecodeError, ContextError) as exc:
         print(f"compose_prompt: {exc}", file=sys.stderr)
         return 2
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(render(args.role, validated), encoding="utf-8")
-    print(args.out)
+    print(
+        json.dumps(
+            {
+                "prompt": str(args.out.resolve()),
+                "workspace": validated["workspace"],
+                "role": args.role,
+                "mode": validated["mode"],
+            }
+        )
+    )
     return 0
 
 

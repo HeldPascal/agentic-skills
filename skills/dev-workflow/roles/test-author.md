@@ -19,7 +19,8 @@ Write the authoritative tests for a work package from its specification. Read
 
 ## Mode `repair`
 
-Independence is over: you see implementation, tests, review reports. Address the findings you
+Independence is over: you see implementation, tests, review reports. If you are a fresh repair
+worker, read the previous test author's report (named in your context) first. Address the findings you
 were given, fix test defects the coordinator classified, and consolidate where the review
 proposes it without losing meaningful fault detection. New tests that the concurrent
 implementation repair will satisfy may be red in your worktree - report them, do not weaken
