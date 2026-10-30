@@ -664,3 +664,36 @@ def process_stopped(pid_file: Path, within: float = 5.0) -> bool:
         time.sleep(0.05)
     os.kill(pid, 9)  # do not leak the process if the assertion fails
     return False
+
+
+def test_describe_accepts_the_role_as_its_value(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert compose_prompt.main(["--describe", "reviewer-code"]) == 0
+    by_value = capsys.readouterr().out
+    assert compose_prompt.main(["--describe", "--role", "reviewer-code"]) == 0
+
+    assert by_value == capsys.readouterr().out
+    assert "  diff " in by_value
+
+
+def test_mode_is_rejected_when_rendering(workspace: Path, tmp_path: Path) -> None:
+    ctx_file = tmp_path / "ctx.json"
+    ctx_file.write_text(json.dumps(context(workspace)))
+    out = tmp_path / "prompt.md"
+
+    code = compose_prompt.main(
+        [
+            "--role",
+            "implementer",
+            "--context",
+            str(ctx_file),
+            "--mode",
+            "repair",
+            "--out",
+            str(out),
+        ]
+    )
+
+    assert code == 2
+    assert not out.exists()

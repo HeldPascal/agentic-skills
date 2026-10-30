@@ -7,7 +7,7 @@ rules and its role file (absolute paths of this skill installation), lists the
 task context, and states coordinator overrides together with their reasons.
 
 Usage:
-    compose_prompt.py --describe --role ROLE [--mode MODE]
+    compose_prompt.py --describe ROLE [--mode MODE]
     compose_prompt.py --role ROLE --context ctx.json [--set KEY=VALUE ...]
                       --out prompt.md
 
@@ -330,17 +330,32 @@ def render(role: str, context: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--role", required=True, choices=sorted(ROLES))
-    parser.add_argument("--describe", action="store_true")
+    parser.add_argument("--role", choices=sorted(ROLES))
+    parser.add_argument(
+        "--describe",
+        nargs="?",
+        const="",
+        metavar="ROLE",
+        help="list the context fields of ROLE (or of --role) and exit",
+    )
     parser.add_argument("--mode", help="with --describe: the mode to describe")
     parser.add_argument("--context", type=Path)
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.describe:
-            print(describe(args.role, args.mode))
+        if args.describe is not None:
+            role = args.describe or args.role
+            if role is None:
+                raise ContextError("--describe needs a role")
+            print(describe(role, args.mode))
             return 0
+        if args.mode is not None:
+            raise ContextError(
+                "--mode only applies to --describe; use --set mode=<mode>"
+            )
+        if args.role is None:
+            raise ContextError("--role is required")
         if args.context is None or args.out is None:
             raise ContextError("--context and --out are required (or use --describe)")
         context = json.loads(args.context.read_text(encoding="utf-8"))

@@ -15,7 +15,7 @@ they are independent of the project's language:
 | --- | --- |
 | `check_requirements.py` | Setup: the workflow skills (and Orca) are installed for every agent harness you will dispatch to, and the tools exist. |
 | `check_baseline.py` | Before discovery and after creating each worker worktree: HEAD on the intended baseline, clean tree, not based on a stale ref. |
-| `compose_prompt.py` | Render every worker start prompt from a JSON context (`--describe --role <role> [--mode <mode>]` lists the fields; `--set KEY=VALUE` varies one dispatch). Never derive a prompt or context by editing an earlier one by hand. It verifies that a worker's workspace sits exactly on its baseline. |
+| `compose_prompt.py` | Render every worker start prompt from a JSON context (`--describe <role> [--mode <mode>]` lists the fields; `--set KEY=VALUE` varies one dispatch). Never derive a prompt or context by editing an earlier one by hand. It verifies that a worker's workspace sits exactly on its baseline. |
 | `run_checks.py` | Run the project's own verification commands in stages (`fast`, `full`, ...) with logs and optional timeouts. |
 | `snapshot_spec.py` | Preserve each accepted spec version as an immutable, read-only snapshot file. |
 
@@ -30,7 +30,8 @@ they are independent of the project's language:
   harnesses, the role's needs (strong reasoning for spec author, critic and reviewers; an
   economical model is often enough for implementation from a precise spec), the task's
   complexity, cost, and any preferences the user stated. Keep author and judge in different
-  model families. Ask the user only when a real constraint or trade-off needs their decision.
+  model families. Using this workflow authorizes these choices unless the user restricted them;
+  ask the user only when a real constraint or trade-off needs their decision.
   Record requested and effective model/effort for every dispatch (`references/orca.md`).
 - Create a **run directory** outside the repository, e.g.
   `${XDG_STATE_HOME:-~/.local/state}/dev-workflow/<project>/<run-id>/`. It holds the workflow
