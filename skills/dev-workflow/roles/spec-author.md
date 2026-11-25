@@ -75,6 +75,13 @@ add a change-log entry with the reason and change class, and report which accept
 and interfaces changed. Never edit a snapshot; the coordinator snapshots the new version once it
 is accepted.
 
+## While you wait for your peer
+
+The critic and you converse directly and wait with `check --wait` on your own terminal handle.
+If you have to end your turn while waiting for the peer's address or its review, first send the
+coordinator a short `status` message ("waiting for critic review of <version>"). Without it the
+idle stop is reported as a failure.
+
 ## Completion report
 
 Final version, number of rounds, the most significant changes made due to critique, rejected

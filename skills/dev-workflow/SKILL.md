@@ -2,7 +2,7 @@
 name: dev-workflow
 description: Spec-first, multi-agent software development workflow - a coordinator runs requirements discovery, spec author/critic dialogue, independently developed tests and implementation, integration with failure classification, cross-model code and test review, and evidence-based completion. Use when coordinating a non-trivial feature or milestone through several agents (e.g. with Orca), or when you were dispatched as one of its roles (spec author/critic, test author, implementer, code or test reviewer).
 metadata:
-  version: "0.3.1"
+  version: "0.4.0"
 ---
 
 # Development workflow
@@ -86,3 +86,11 @@ incorrect implementation or test pass.
 9. **Completion.** End with exactly one completion report through your orchestration channel,
    marked succeeded or failed (never hide failure in prose), naming the files you changed and
    your report file if any. Then stop.
+10. **No workflow artifacts in the repository.** Code, tests, comments, docstrings,
+    documentation, commit messages and branch names describe behavior in their own terms. They
+    must not cite work-package or milestone names, specification or decision-record versions or
+    sections, acceptance-criterion, finding or probe numbers, or the location of the workflow
+    documents (run directory, planning repository), unless the project's conventions or the user
+    say otherwise. Explain the rule or reason in place instead of pointing to the specification;
+    such references go stale and expose process documents. Traceability from criteria to tests
+    belongs in your report, not in the code.

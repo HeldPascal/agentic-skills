@@ -32,6 +32,13 @@ specification (`spec`), the accepted version it started from (`snapshot`) and th
 sources. Compare the two files to see exactly what changed. Check that it is consistent, does not contradict intent, and say which existing
 acceptance criteria, tests or implementations it invalidates. Do not reopen the whole spec.
 
+## While you wait for your peer
+
+The author and you converse directly and wait with `check --wait` on your own terminal handle.
+If you have to end your turn while waiting for the peer's address or its next draft (for
+example while forming your own expectations), first send the coordinator a short `status`
+message ("waiting for draft <version>"). Without it the idle stop is reported as a failure.
+
 ## Completion report
 
 Rounds, verdicts for spec and skeleton, the most important findings and their resolution, which

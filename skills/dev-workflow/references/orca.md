@@ -60,12 +60,26 @@ worktree (critic and reviewers read-only).
    `compose_prompt.py` refuses the context unless the workspace is the worktree root and sits
    exactly on the baseline.
 
+## Worker preflight
+
+Run it before the first real dispatch (`roles/coordinator.md`, section 4). Create a throwaway
+worktree from the baseline (`orca worktree create --name preflight --base-branch <integration
+branch> --parent-worktree <your worktree> --json`, without `--agent`) and start one probe per
+harness and model setup with `worker-start --spec` into it, with the same `--agent`,
+`--model` and `--effort` the real worker will get. The probe's assignment: create a file,
+commit it on its own branch, run `run_checks.py` with the `fast` stage, write a short report to
+a path like a real report's, then send its completion report. Read the receipt and the commit:
+the file must be committed by the worker itself. Remove the worktree afterwards, as under
+*Cleanup*.
+
 ## Author/critic dialogue
 
 Start both, then send each the other's address once:
 `orca orchestration send --to dispatch:<author> --type status --subject "Peer" --body "Critic: dispatch:<critic>"`
 (and vice versa). They exchange `status` messages directly and wait with `check --wait` on
-their own terminal handle.
+their own terminal handle. A spec worker that has to end its turn while waiting tells you with
+a `status` message first; if its stop is reported as an escalation anyway, acknowledge it
+instead of restarting the worker.
 
 ## Waiting and processing
 
