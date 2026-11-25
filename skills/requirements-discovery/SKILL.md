@@ -2,7 +2,7 @@
 name: requirements-discovery
 description: Turn a vague feature idea, bug report or development goal into a clear, testable task through focused interactive questions - producing a Task Brief and a lightweight Decision Record. Use at the start of non-trivial development work when requirements, scope or important trade-offs are not yet clear, before writing specifications or code.
 metadata:
-  version: "0.1.1"
+  version: "0.2.0"
 ---
 
 # Requirements discovery
@@ -26,6 +26,14 @@ Before asking anything:
 
 - Ask about product behavior, scope, user-visible trade-offs and priorities - not about
   implementation details you can reasonably decide or leave to the specification process.
+- **Context first, then short questions.** Before asking, write the background as a normal
+  message in the conversation, not inside the question: what the decision is about, what each
+  option means with a concrete example, and what follows from each. Use the formatting that
+  helps, such as lists, tables and code blocks. Only then ask. Questions that carry this
+  explanation themselves become long and hard to read, and text written before a question
+  dialog may not be visible while it is open, so the questions must be short but still stand on
+  their own: name the items they ask about and decide something in a sentence or two. If the
+  user asks for more context, give it in the conversation and repeat the question afterwards.
 - Prefer structured questions (single choice, multiple choice) with a recommended option and
   a one-line consequence per option; group related questions; keep rounds small.
 - Free-text answers often refine or reject the offered options. Read them carefully, reflect

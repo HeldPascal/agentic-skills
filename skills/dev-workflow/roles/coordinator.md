@@ -65,7 +65,9 @@ they are independent of the project's language:
    with strong reasoning, both with the intent sources, parent specs and the real APIs of
    completed packages. The critic forms its expectations while the author drafts.
 2. Tell each its peer's address once both are running; they converse directly. You answer
-   questions and watch for escalations.
+   questions and watch for escalations. A "worker stopped without reporting" escalation from a
+   spec worker that told you it is waiting for its peer or for a draft is informational:
+   acknowledge it, do not restart the worker.
 3. After `ACCEPT` the author produces the interface skeleton (for new code) and the critic
    verifies it. Skip the skeleton only where an existing interface already serves as contract.
 4. **Intent check (yours, mandatory):** read the accepted spec against the Task Brief and
@@ -92,6 +94,15 @@ they are independent of the project's language:
 - **Before starting anyone:** create one worktree per worker from the baseline, verify each
   with `check_baseline.py --worktree <path> --expect <baseline>`, and only then render the
   prompts with the real paths.
+- **Worker preflight** (once per run and harness setup, and again after the user changes
+  sandbox or approval settings): before the first real dispatch, prove that a worker can do its
+  job in a worktree. Start a trivial worker per harness in a throwaway worktree from the
+  baseline whose assignment is to create a file and commit it on its own branch, run the `fast`
+  stage of `checks.json` through `run_checks.py`, and write a short report to a path of the kind
+  real reports use. If something fails (git metadata or caches not writable in the sandbox,
+  report path not writable, checks cannot run), tell the user what to change instead of
+  silently committing on workers' behalf, and record any such workaround. Remove the throwaway
+  worktree afterwards (`references/orca.md`).
 - Dispatch Test Author (mode `initial`) and Implementer (mode `initial`) in parallel, each with
   `ownership` (its writable paths) and `isolation` (the other's worktree and branch). A precise
   spec lets an economical model implement; the test author benefits from a thorough one.
@@ -187,7 +198,16 @@ with significant external, costly or irreversible consequences (including mergin
 branch). Do **not** stop or report merely because a work package or phase finished - continue
 autonomously unless the user asked for checkpoints.
 
+When you ask, write the background in the conversation first (what is decided, what the options
+mean with a concrete example, what follows) and then ask short questions that still stand on
+their own. Do not put the explanation into the question text (`requirements-discovery`, section 2).
+
 ## 10. Completion
+
+Before accepting a package, search the diff and the commit messages for workflow identifiers
+(shared rule 10): work-package names, spec versions and sections, acceptance-criterion, finding
+and probe numbers, run-directory or planning-repository paths. Have them rewritten to explain
+the behavior in place; add a project guard test only if the user wants one.
 
 Accept the overall task only with evidence. The final report states: implemented spec versions,
 acceptance criteria and how each is demonstrated, checks actually run and their results,
